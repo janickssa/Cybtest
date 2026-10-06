@@ -1,30 +1,54 @@
 mod auth;
+mod export;
+mod plan;
+mod rules;
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::Arc;
 
+use axum::extract::FromRef;
 use axum::routing::{get, post};
 use axum::{middleware, Json, Router};
 use serde_json::{json, Value};
+use tower_http::services::{ServeDir, ServeFile};
 
 use auth::Auth;
+use rules::Knowledge;
 
-pub fn router(auth: Auth) -> Router {
+#[derive(Clone, FromRef)]
+pub struct AppState {
+    auth: Auth,
+    knowledge: Arc<Knowledge>,
+}
+
+pub fn router(state: AppState, frontend_dir: Option<PathBuf>) -> Router {
     let protected = Router::new()
         .route(
             "/api/me",
             get(|| async { Json(json!({ "user": "admin" })) }),
         )
+        .route("/api/tags", get(plan::tags))
+        .route("/api/analyze", post(plan::analyze))
+        .route("/api/plan", post(plan::plan))
+        .route("/api/export/markdown", post(plan::export_markdown))
         .route_layer(middleware::from_fn_with_state(
-            auth.clone(),
+            state.auth.clone(),
             auth::require_session,
         ));
 
-    Router::new()
+    let api = Router::new()
         .route("/api/health", get(health))
         .route("/api/login", post(auth::login))
         .route("/api/logout", post(auth::logout))
         .merge(protected)
-        .with_state(auth)
+        .with_state(state);
+
+    match frontend_dir {
+        Some(dir) => api
+            .fallback_service(ServeDir::new(&dir).fallback(ServeFile::new(dir.join("index.html")))),
+        None => api,
+    }
 }
 
 async fn health() -> Json<Value> {
@@ -58,9 +82,36 @@ async fn main() {
         std::process::exit(1);
     });
 
+    let env_path = |name: &str, default: &str| {
+        PathBuf::from(std::env::var(name).unwrap_or_else(|_| default.into()))
+    };
+    let knowledge = Knowledge::load(
+        &env_path("RULES_DIR", "rules"),
+        &env_path("CATALOG_DIR", "catalog"),
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("failed to load rules: {e}");
+        std::process::exit(1);
+    });
+    tracing::info!(
+        "loaded {} rules, {} tags, {} catalog actions",
+        knowledge.rules.len(),
+        knowledge.tags.len(),
+        knowledge.catalog.len()
+    );
+    let frontend_dir =
+        Some(env_path("FRONTEND_DIR", "frontend/dist")).filter(|d| d.join("index.html").exists());
+    if frontend_dir.is_none() {
+        tracing::warn!("frontend not found (set FRONTEND_DIR); serving the API only");
+    }
+    let state = AppState {
+        auth,
+        knowledge: Arc::new(knowledge),
+    };
+
     let listener = tokio::net::TcpListener::bind(bind).await.expect("bind");
     tracing::info!("listening on http://{bind}");
-    axum::serve(listener, router(auth))
+    axum::serve(listener, router(state, frontend_dir))
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
@@ -76,7 +127,14 @@ mod tests {
     use tower::ServiceExt;
 
     fn app() -> Router {
-        router(Auth::new(auth::hash_password("secret"), false).unwrap())
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let state = AppState {
+            auth: Auth::new(auth::hash_password("secret"), false).unwrap(),
+            knowledge: Arc::new(
+                Knowledge::load(&root.join("rules"), &root.join("catalog")).unwrap(),
+            ),
+        };
+        router(state, None)
     }
 
     fn login_req(password: &str) -> Request<Body> {

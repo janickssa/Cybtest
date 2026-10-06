@@ -1,0 +1,100 @@
+# Feature-specific and data-store checks.
+
+- id: sql-injection
+  title: SQL injection
+  when: { any: ["db:sql"] }
+  severity: high
+  references: [WSTG-INPV-05, ASVS-V5]
+  description: >
+    Check that every query uses parameters. Test search fields, filters, sort
+    and order-by parameters, which are often built by hand even when an ORM is used.
+  expected_secure_behavior: Quotes and SQL syntax in input never change a query.
+  actions: [{ id: semgrep-scan, requires: [source] }]
+
+- id: nosql-injection
+  title: NoSQL injection
+  when: { any: ["db:mongodb"] }
+  severity: high
+  references: [WSTG-INPV-05]
+  description: >
+    Send JSON operators such as {"$ne": null} or {"$gt": ""} where a string is
+    expected, for example in login forms and filters.
+  expected_secure_behavior: Input is type-checked; operators in user input are rejected.
+
+- id: file-upload
+  title: Unsafe file uploads
+  when: { any: ["feature:file-upload"] }
+  severity: high
+  references: [WSTG-BUSL-08, WSTG-BUSL-09]
+  description: >
+    Upload files with wrong extensions, double extensions, SVG/HTML with
+    scripts, huge files and zip bombs, and check where and how they're served.
+  expected_secure_behavior: Type and size validated; files stored outside the web root and served with Content-Disposition and safe content types.
+
+- id: ssrf
+  title: Server-side request forgery (SSRF)
+  when: { any: ["feature:url-fetch"] }
+  severity: high
+  references: [WSTG-INPV-19, OWASP-A10]
+  description: >
+    Where the server fetches URLs you give it, try internal addresses
+    (127.0.0.1, 169.254.169.254, internal hostnames), other schemes and redirects.
+  expected_secure_behavior: Only allowed external hosts are fetched; internal ranges blocked after DNS resolution.
+
+- id: xml-external-entities
+  title: XML external entities (XXE)
+  when: { any: ["feature:xml"] }
+  severity: high
+  references: [WSTG-INPV-07]
+  description: Send XML with external entity and DTD declarations to every endpoint that accepts XML or SAML.
+  expected_secure_behavior: DTDs and external entities are disabled in the parser.
+
+- id: cors-policy
+  title: CORS policy
+  when: { any: ["api:rest", "api:graphql"] }
+  severity: medium
+  references: [WSTG-CLNT-07]
+  description: >
+    Check whether the API reflects arbitrary Origin headers or allows "null"
+    together with Access-Control-Allow-Credentials.
+  expected_secure_behavior: Only known origins allowed; never a reflected origin with credentials.
+  actions: [{ id: builtin-cors-checks, requires: [url] }]
+
+- id: graphql-hardening
+  title: GraphQL introspection and query limits
+  when: { any: ["api:graphql"] }
+  severity: medium
+  references: [WSTG-APIT-01]
+  description: >
+    Check whether introspection is enabled in production, and whether deep or
+    batched queries and field suggestions can be abused.
+  expected_secure_behavior: Introspection off in production; depth, cost and batch limits enforced.
+
+- id: websocket-security
+  title: WebSocket security
+  when: { any: ["feature:websocket"] }
+  severity: medium
+  references: [WSTG-CLNT-10]
+  description: Check Origin validation on the handshake, authentication per connection, and input validation on messages.
+  expected_secure_behavior: Handshakes from other origins rejected; every message authorized.
+
+- id: payment-logic
+  title: Payment and order business logic
+  when: { any: ["feature:payments"] }
+  severity: high
+  references: [WSTG-BUSL-01, WSTG-BUSL-04]
+  description: >
+    Try negative quantities, changed prices or currencies in requests, reusing
+    discount codes, and completing orders without a confirmed payment
+    (replayed or forged payment callbacks).
+  expected_secure_behavior: Prices are computed server-side; orders only complete after verified payment webhooks.
+
+- id: rust-panic-dos
+  title: Panics on malformed input
+  when: { any: ["fw:actix-web", "fw:axum"] }
+  severity: medium
+  references: [WSTG-ERRH-01]
+  description: >
+    Look for unwrap/expect/indexing on request data and send malformed JSON,
+    huge bodies and unexpected types. Panics can kill workers or leak details.
+  expected_secure_behavior: Malformed requests get a 4xx response; the service stays up.

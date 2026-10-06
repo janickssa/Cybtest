@@ -1,0 +1,7 @@
+id: builtin-cors-checks
+title: CORS policy checks
+tool: built-in
+input: url
+mode: passive
+est_minutes: 1
+command: ["sectestgen-checks", "cors", "--url", "{{ url }}", "--output", "{{ out }}/cors.json"]

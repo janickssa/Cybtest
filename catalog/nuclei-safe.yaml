@@ -1,0 +1,7 @@
+id: nuclei-safe
+title: Known misconfigurations and exposures
+tool: nuclei
+input: url
+mode: passive
+est_minutes: 5
+command: ["nuclei", "-u", "{{ url }}", "-exclude-tags", "intrusive,dos,fuzz", "-jsonl", "-o", "{{ out }}/nuclei.jsonl"]

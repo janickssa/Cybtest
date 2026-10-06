@@ -1,0 +1,7 @@
+id: zap-baseline
+title: Baseline web scan (headers, cookies, info leaks)
+tool: zap
+input: url
+mode: passive
+est_minutes: 5
+command: ["zap-baseline.py", "-t", "{{ url }}", "-J", "{{ out }}/zap-baseline.json"]

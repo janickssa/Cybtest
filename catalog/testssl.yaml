@@ -1,0 +1,7 @@
+id: testssl
+title: TLS configuration
+tool: testssl.sh
+input: url
+mode: passive
+est_minutes: 3
+command: ["testssl.sh", "--jsonfile", "{{ out }}/testssl.json", "{{ url }}"]

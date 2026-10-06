@@ -1,0 +1,73 @@
+# Authentication, sessions and access control.
+
+- id: jwt-weak-validation
+  title: JWT validation weaknesses
+  when: { any: ["auth:jwt"] }
+  severity: high
+  references: [WSTG-SESS-10, ASVS-V3]
+  description: >
+    Verify the server rejects tokens with alg "none", tokens signed with a
+    different key, expired tokens, and tokens with tampered claims.
+  expected_secure_behavior: All manipulated tokens return 401.
+  actions: [{ id: builtin-jwt-checks, requires: [url] }]
+
+- id: login-brute-force
+  title: Brute-force and credential stuffing protection
+  when: { any: ["auth:login"] }
+  severity: medium
+  references: [WSTG-ATHN-03, ASVS-V2]
+  description: >
+    Try many wrong passwords against one account and one password against many
+    accounts. Also check whether error messages reveal which usernames exist.
+  expected_secure_behavior: Rate limiting or lockout kicks in; identical errors for unknown users and wrong passwords.
+
+- id: session-cookie-flags
+  title: Session cookie attributes
+  when: { any: ["auth:login", "auth:session"] }
+  severity: medium
+  references: [WSTG-SESS-02, ASVS-V3]
+  description: Session cookies should be HttpOnly, Secure and SameSite, and be renewed at login and cleared at logout.
+  expected_secure_behavior: HttpOnly; Secure; SameSite=Lax or Strict; new session ID after login.
+  actions: [{ id: zap-baseline, requires: [url] }]
+
+- id: csrf
+  title: Cross-site request forgery (CSRF)
+  when: { any: ["auth:session"] }
+  severity: medium
+  references: [WSTG-SESS-05, ASVS-V4]
+  description: >
+    With cookie-based sessions, check that state-changing requests (POST, PUT,
+    DELETE) can't be triggered from another site, via SameSite cookies, CSRF
+    tokens or requiring a JSON content type.
+  expected_secure_behavior: A form on another origin can't change data for a logged-in user.
+
+- id: oauth-flows
+  title: OAuth / OpenID Connect weaknesses
+  when: { any: ["auth:oauth"] }
+  severity: high
+  references: [WSTG-ATHZ-05]
+  description: >
+    Check redirect_uri validation (open redirects, subdomain tricks), state and
+    nonce use, PKCE for public clients, and that ID tokens are validated
+    (issuer, audience, signature, expiry).
+  expected_secure_behavior: Only exact registered redirect URIs accepted; state, nonce and PKCE enforced.
+
+- id: idor
+  title: Access to other users' data (IDOR)
+  when: { any: ["api:rest", "api:graphql"] }
+  severity: high
+  references: [WSTG-ATHZ-04, ASVS-V4]
+  description: >
+    Log in as two users and replay user A's requests with user B's session,
+    changing IDs in paths, query strings and bodies.
+  expected_secure_behavior: Every object access is checked against the logged-in user; 403 or 404 otherwise.
+
+- id: admin-access-control
+  title: Admin functions reachable by normal users
+  when: { any: ["feature:admin"] }
+  severity: high
+  references: [WSTG-ATHZ-02, WSTG-ATHZ-03]
+  description: >
+    Call admin pages and API endpoints directly as a normal user and logged
+    out. Hidden menu items are not access control.
+  expected_secure_behavior: Admin endpoints return 401/403 for everyone but admins.

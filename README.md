@@ -458,10 +458,16 @@ DEFAULT_RATE_LIMIT_RPS=10
 
 ```bash
 cp .env.example .env
-cd frontend && npm install && npm run dev     # http://localhost:5173
-cargo run -p app                              # http://localhost:8080
-cargo run -p runner                           # needs tools: deploy/runner/install-tools.sh
+# Put a password hash in .env:
+echo "AUTH_PASSWORD_HASH='$(cargo run -q -p app -- hash-password 'my password')'" >> .env
+set -a && . ./.env && set +a && cargo run -p app   # API on http://localhost:8080
+cd frontend && npm install && npm run dev          # UI on http://localhost:5173 (proxies /api)
+cargo test                                         # rules, plan builder, login
 ```
+
+Or run the UI from the app itself: `cd frontend && npm run build`, then open http://localhost:8080.
+
+The runner (`cargo run -p runner`) arrives in Phase 2.
 
 ---
 
@@ -480,8 +486,8 @@ cargo run -p runner                           # needs tools: deploy/runner/insta
 ## Roadmap
 
 **Phase 1 – Plan generator (MVP)**
-- [ ] Wizard UI, tags, description input, ~30 rules, Markdown export
-- [ ] Single-user login, LXC install for the app container
+- [x] Wizard UI, tags, description input, ~30 rules, Markdown export
+- [x] Single-user login, LXC install for the app container
 
 **Phase 2 – Code uploads**
 - [ ] Runner container with safe zip extraction and stack detection

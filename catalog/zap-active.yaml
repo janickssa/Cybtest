@@ -1,0 +1,7 @@
+id: zap-active
+title: Full active web scan
+tool: zap
+input: url
+mode: active
+est_minutes: 40
+command: ["zap-full-scan.py", "-t", "{{ url }}", "-J", "{{ out }}/zap-full.json"]

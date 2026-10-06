@@ -1,0 +1,64 @@
+# Checks that need the project's source code.
+
+- id: secrets-in-source
+  title: Secrets in source code
+  when: { any: ["input:source"] }
+  severity: high
+  references: [WSTG-INFO-05, ASVS-V6]
+  description: >
+    API keys, passwords, private keys and tokens committed to the code or its
+    configuration files can be read by anyone with access to the repository.
+  expected_secure_behavior: No secrets in the code; they come from the environment or a secret store.
+  actions: [{ id: gitleaks-scan, requires: [source] }]
+
+- id: vulnerable-dependencies
+  title: Vulnerable dependencies
+  when: { any: ["input:source"] }
+  severity: high
+  references: [OWASP-A06, ASVS-V14]
+  description: >
+    Libraries with known vulnerabilities (CVEs, GHSA, RUSTSEC) are found by
+    reading the lockfiles. Nothing is installed or built.
+  expected_secure_behavior: No dependencies with known high or critical vulnerabilities.
+  actions: [{ id: osv-scanner, requires: [source] }]
+
+- id: rust-vulnerable-crates
+  title: Vulnerable Rust crates
+  when: { any: ["lang:rust"] }
+  severity: high
+  references: [OWASP-A06]
+  description: Checks Cargo.lock against the RustSec advisory database, including yanked and unmaintained crates.
+  expected_secure_behavior: cargo-audit reports no vulnerabilities.
+  actions: [{ id: cargo-audit, requires: [source] }]
+
+- id: static-analysis
+  title: Static code analysis
+  when: { any: ["input:source"] }
+  severity: medium
+  references: [ASVS-V5]
+  description: >
+    Pattern-based scan for common bug classes such as injection, unsafe
+    deserialization, weak crypto and dangerous functions.
+  actions: [{ id: semgrep-scan, requires: [source] }]
+
+- id: rust-raw-sql
+  title: SQL built with string formatting in sqlx
+  when: { all: ["lib:sqlx"], none: ["db:orm"] }
+  severity: high
+  references: [WSTG-INPV-05, ASVS-V5]
+  description: >
+    Look for sqlx::query calls whose SQL text is built with format! or string
+    concatenation instead of bind parameters, or the query! macros.
+  expected_secure_behavior: All user input reaches SQL through bind parameters.
+  actions: [{ id: semgrep-scan, requires: [source] }]
+
+- id: react-dangerous-html
+  title: Unsafe HTML rendering in React
+  when: { any: ["fw:react"] }
+  severity: medium
+  references: [WSTG-CLNT-03]
+  description: >
+    dangerouslySetInnerHTML, javascript: URLs in href and direct DOM writes
+    bypass React's escaping and can lead to cross-site scripting.
+  expected_secure_behavior: User content is never rendered as raw HTML without sanitizing it (e.g. DOMPurify).
+  actions: [{ id: semgrep-scan, requires: [source] }]

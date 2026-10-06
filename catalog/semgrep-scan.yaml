@@ -1,0 +1,7 @@
+id: semgrep-scan
+title: Static code analysis
+tool: semgrep
+input: source
+mode: passive
+est_minutes: 3
+command: ["semgrep", "scan", "--config", "p/default", "--sarif", "--output", "{{ out }}/semgrep.sarif", "{{ src }}"]

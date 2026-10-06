@@ -1,0 +1,7 @@
+id: osv-scanner
+title: Vulnerable dependencies (all ecosystems)
+tool: osv-scanner
+input: source
+mode: passive
+est_minutes: 1
+command: ["osv-scanner", "scan", "source", "--recursive", "--format", "sarif", "--output", "{{ out }}/osv.sarif", "{{ src }}"]

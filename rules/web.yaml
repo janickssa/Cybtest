@@ -1,0 +1,103 @@
+# Checks against a running website or API.
+
+- id: security-headers
+  title: Security headers and information leaks
+  when: { any: ["input:url"] }
+  severity: medium
+  references: [WSTG-CONF-12, WSTG-CONF-14, WSTG-INFO-02]
+  description: >
+    Checks Content-Security-Policy, X-Content-Type-Options, frame protection,
+    Referrer-Policy and HSTS, and looks for version numbers or stack traces in
+    responses.
+  expected_secure_behavior: Recommended headers present; no version banners or debug output.
+  actions: [{ id: zap-baseline, requires: [url] }]
+
+- id: tls-configuration
+  title: TLS configuration
+  when: { any: ["proto:https"] }
+  severity: medium
+  references: [WSTG-CRYP-01, ASVS-V9]
+  description: Checks protocol versions, cipher suites, certificate validity and known TLS vulnerabilities.
+  expected_secure_behavior: TLS 1.2+ only, strong ciphers, valid certificate, HSTS enabled.
+  actions: [{ id: testssl, requires: [url] }]
+
+- id: cleartext-http
+  title: Traffic sent without encryption
+  when: { any: ["proto:http"] }
+  severity: high
+  references: [WSTG-CRYP-03, ASVS-V9]
+  description: >
+    The target uses plain HTTP, so logins, cookies and data can be read or
+    changed by anyone on the network path. Check whether HTTPS is available
+    and whether HTTP redirects to it.
+  expected_secure_behavior: HTTP only redirects to HTTPS; no sensitive data over plain HTTP.
+
+- id: known-exposures
+  title: Known misconfigurations and exposed files
+  when: { any: ["input:url"] }
+  severity: medium
+  references: [WSTG-CONF-04, WSTG-CONF-05]
+  description: >
+    Looks for exposed .git folders, backup files, admin consoles, default
+    pages and known CVEs in server software, using non-intrusive templates only.
+  expected_secure_behavior: No sensitive files or default consoles reachable.
+  actions: [{ id: nuclei-safe, requires: [url] }]
+
+- id: full-active-scan
+  title: Full active web scan
+  when: { any: ["input:url"] }
+  severity: medium
+  references: [WSTG-INPV]
+  description: >
+    Crawls the site and sends attack payloads (SQL injection, XSS, path
+    traversal, etc.) to every parameter it finds. Can create data, send
+    emails or slow the target down. Only run against test environments.
+  expected_secure_behavior: No injection or traversal findings.
+  actions: [{ id: zap-active, requires: [url] }]
+
+- id: cross-site-scripting
+  title: Cross-site scripting (XSS)
+  when: { any: ["fw:django", "fw:flask", "fw:laravel", "fw:express", "fw:spring", "fw:wordpress", "lang:php"] }
+  severity: high
+  references: [WSTG-INPV-01, WSTG-INPV-02, ASVS-V5]
+  description: >
+    Server-rendered pages: check that user input is escaped in every output
+    context (HTML, attributes, JavaScript, URLs), including templates marked
+    "safe" or "raw".
+  expected_secure_behavior: Payloads like <script>alert(1)</script> are shown as text, never executed.
+  actions: [{ id: semgrep-scan, requires: [source] }]
+
+- id: debug-mode
+  title: Debug mode or developer error pages
+  when: { any: ["fw:django", "fw:flask", "fw:laravel", "fw:spring", "fw:nextjs", "fw:express"] }
+  severity: high
+  references: [WSTG-ERRH-01, WSTG-CONF-02]
+  description: >
+    Framework debug modes (Django DEBUG, Flask/Werkzeug debugger, Laravel
+    Ignition, Spring Boot actuators) leak source code, settings and sometimes
+    allow running code.
+  expected_secure_behavior: Generic error pages; debug tools and actuators unreachable.
+  actions: [{ id: nuclei-safe, requires: [url] }]
+
+- id: web-server-config
+  title: Web server misconfiguration
+  when: { any: ["server:nginx", "server:apache"] }
+  severity: medium
+  references: [WSTG-CONF-02, WSTG-CONF-04]
+  description: >
+    Check for directory listing, server-status pages, nginx alias path
+    traversal (missing trailing slash) and outdated server versions.
+  expected_secure_behavior: No listings, status pages or traversal; current server version.
+  actions: [{ id: nuclei-safe, requires: [url] }]
+
+- id: wordpress-checks
+  title: WordPress core and plugin weaknesses
+  when: { any: ["fw:wordpress"] }
+  severity: high
+  references: [WSTG-CONF-04, OWASP-A06]
+  description: >
+    Outdated core and plugins are the most common WordPress problem. Also check
+    user enumeration (/?author=1, /wp-json/wp/v2/users), xmlrpc.php and
+    exposed wp-config backups.
+  expected_secure_behavior: Everything up to date; enumeration and xmlrpc disabled.
+  actions: [{ id: nuclei-safe, requires: [url] }]
