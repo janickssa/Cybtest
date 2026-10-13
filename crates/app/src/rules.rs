@@ -6,6 +6,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+pub use common::{CatalogAction, Severity};
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TagDef {
     pub id: String,
@@ -54,15 +56,6 @@ impl When {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Severity {
-    High,
-    Medium,
-    Low,
-    Info,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuleAction {
     pub id: String,
@@ -83,20 +76,6 @@ pub struct Rule {
     pub expected_secure_behavior: Option<String>,
     #[serde(default)]
     pub actions: Vec<RuleAction>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CatalogAction {
-    pub id: String,
-    pub title: String,
-    pub tool: String,
-    /// `source` or `url`.
-    pub input: String,
-    /// `passive` or `active`.
-    pub mode: String,
-    #[serde(default)]
-    pub est_minutes: u32,
-    pub command: Vec<String>,
 }
 
 pub struct Knowledge {
@@ -144,10 +123,7 @@ impl Knowledge {
         )
         .map_err(|e| format!("{}: {e}", tags_path.display()))?;
         let rules: Vec<Rule> = load_dir(rules_dir, TAGS_FILE)?;
-        let catalog = load_dir::<CatalogAction>(catalog_dir, "")?
-            .into_iter()
-            .map(|a| (a.id.clone(), a))
-            .collect();
+        let catalog = common::load_catalog(catalog_dir)?;
         let k = Self {
             tags,
             rules,
@@ -225,6 +201,11 @@ impl Knowledge {
                     .or_insert_with(|| format!("\"{kw}\" in description"));
             }
         }
+        self.with_implied(found)
+    }
+
+    /// Adds the tags implied by `found` (id → evidence) and attaches labels.
+    pub fn with_implied(&self, mut found: BTreeMap<String, String>) -> Vec<DetectedTag> {
         self.add_implied(&mut found);
         found
             .into_iter()

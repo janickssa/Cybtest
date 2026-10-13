@@ -4,4 +4,7 @@ tool: semgrep
 input: source
 mode: passive
 est_minutes: 3
-command: ["semgrep", "scan", "--config", "p/default", "--sarif", "--output", "{{ out }}/semgrep.sarif", "{{ src }}"]
+command: ["semgrep", "scan", "--config", "p/default", "--metrics=off", "--sarif", "--output", "{{ out }}/semgrep.sarif", "{{ src }}"]
+parser: sarif
+output: "{{ out }}/semgrep.sarif"
+timeout_minutes: 20

@@ -43,6 +43,55 @@ export interface ExportRequest {
   selected: string[];
 }
 
+export interface Upload {
+  workspace_id: string;
+  file_count: number;
+  total_bytes: number;
+  tags: DetectedTag[];
+}
+
+export type JobStatus = "queued" | "running" | "done" | "failed" | "stopped";
+
+export interface Finding {
+  tool: string;
+  rule_id: string;
+  title: string;
+  severity: Severity;
+  location: string | null;
+  message: string;
+  snippet: string | null;
+  help: string | null;
+  help_url: string | null;
+}
+
+export interface RunJob {
+  job_id: string;
+  action_id: string;
+  title: string;
+  tool: string;
+  tests: string[];
+  status: JobStatus;
+  elapsed_secs: number;
+  exit_code: number | null;
+  error: string | null;
+  log: string[];
+  finding_count: number;
+}
+
+export interface RunState {
+  run_id: string;
+  finished: boolean;
+  jobs: RunJob[];
+  findings: Finding[];
+}
+
+export interface RunRequest {
+  workspace_id: string;
+  url: string;
+  tags: string[];
+  selected: string[];
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -53,10 +102,11 @@ export class ApiError extends Error {
 }
 
 async function request(path: string, body?: unknown): Promise<Response> {
+  const raw = body instanceof Blob;
   const res = await fetch(path, {
     method: body === undefined ? "GET" : "POST",
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: body === undefined ? {} : { "Content-Type": raw ? "application/zip" : "application/json" },
+    body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
     credentials: "same-origin",
   });
   if (!res.ok) {
@@ -80,6 +130,11 @@ export const api = {
     (await request("/api/analyze", { description, url })).json(),
   plan: async (tags: string[], url: string): Promise<PlanItem[]> =>
     (await request("/api/plan", { tags, url })).json(),
+  upload: async (file: File): Promise<Upload> => (await request("/api/upload", file)).json(),
+  startRun: async (req: RunRequest): Promise<{ run_id: string }> => (await request("/api/runs", req)).json(),
+  run: async (id: string): Promise<RunState> => (await request(`/api/runs/${id}`)).json(),
+  stopRun: (id: string) => request(`/api/runs/${id}/stop`, {}),
+  stopJob: (id: string, jobId: string) => request(`/api/runs/${id}/jobs/${jobId}/stop`, {}),
   exportMarkdown: async (req: ExportRequest): Promise<Blob> =>
     (await request("/api/export/markdown", req)).blob(),
 };

@@ -4,4 +4,6 @@ tool: cargo-audit
 input: source
 mode: passive
 est_minutes: 1
-command: ["cargo-audit", "audit", "--json", "--file", "{{ src }}/Cargo.lock"]
+command: ["cargo-audit", "audit", "--json", "--file", "{{ cargo_lock }}"]
+parser: cargo-audit
+timeout_minutes: 10

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, type DetectedTag, type PlanItem } from "./api";
+import { api, ApiError, type DetectedTag, type PlanItem, type RunState, type Upload } from "./api";
 import Login from "./Login";
+import StepResults from "./StepResults";
 import StepReview from "./StepReview";
+import StepRun from "./StepRun";
 import StepTarget, { type Target } from "./StepTarget";
 import { Button, ErrorNote } from "./ui";
 
@@ -36,9 +38,12 @@ function Stepper({ step }: { step: number }) {
 
 export default function App() {
   const [auth, setAuth] = useState<"checking" | "out" | "in">("checking");
-  const [step, setStep] = useState<1 | 2>(1);
+  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [target, setTarget] = useState<Target>({ name: "", url: "", description: "" });
   const [tags, setTags] = useState<DetectedTag[] | null>(null);
+  const [upload, setUpload] = useState<(Upload & { name: string }) | null>(null);
+  const [runId, setRunId] = useState<string | null>(null);
+  const [run, setRun] = useState<RunState | null>(null);
   const [plan, setPlan] = useState<PlanItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -102,20 +107,43 @@ export default function App() {
     }
   }, [tags, selected, target, onError]);
 
+  const startRun = useCallback(async () => {
+    if (!tags || !upload || selected.size === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { run_id } = await api.startRun({
+        workspace_id: upload.workspace_id,
+        url: target.url,
+        tags: tags.map((t) => t.id),
+        selected: [...selected],
+      });
+      setRun(null);
+      setRunId(run_id);
+      setStep(3);
+      window.scrollTo(0, 0);
+    } catch (e) {
+      onError(e);
+    } finally {
+      setBusy(false);
+    }
+  }, [tags, upload, selected, target.url, onError]);
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         if (step === 1) buildPlan();
-        else exportPlan();
-      } else if (e.key === "/" && step === 2 && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+        else if (step === 2) (upload ? startRun : exportPlan)();
+        else if (step === 3 && run?.finished) setStep(4);
+      } else if (e.key === "/" && (step === 2 || step === 4) && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
         e.preventDefault();
         searchRef.current?.focus();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [step, buildPlan, exportPlan]);
+  }, [step, buildPlan, exportPlan, startRun, upload, run?.finished]);
 
   if (auth === "checking") return null;
   if (auth === "out") return <Login onLogin={() => setAuth("in")} />;
@@ -145,12 +173,14 @@ export default function App() {
           setTarget={setTarget}
           tags={tags}
           setTags={setTags}
+          upload={upload}
+          setUpload={setUpload}
           onContinue={buildPlan}
           busy={busy}
           error={error}
           onError={onError}
         />
-      ) : (
+      ) : step === 2 ? (
         <>
           <ErrorNote message={error} />
           <StepReview
@@ -159,7 +189,9 @@ export default function App() {
             selected={selected}
             setSelected={setSelected}
             url={target.url}
-            hasSource={tags?.some((t) => t.id === "input:source") ?? false}
+            hasSource={upload !== null}
+            canRun={upload !== null}
+            onRun={startRun}
             onBack={() => {
               setError(null);
               setStep(1);
@@ -168,7 +200,21 @@ export default function App() {
             busy={busy}
           />
         </>
-      )}
+      ) : step === 3 && runId ? (
+        <StepRun runId={runId} run={run} setRun={setRun} onResults={() => setStep(4)} onError={onError} />
+      ) : run ? (
+        <>
+          <ErrorNote message={error} />
+          <StepResults
+            ref={searchRef}
+            run={run}
+            projectName={target.name}
+            onBack={() => setStep(2)}
+            onRerun={startRun}
+            busy={busy}
+          />
+        </>
+      ) : null}
     </div>
   );
 }

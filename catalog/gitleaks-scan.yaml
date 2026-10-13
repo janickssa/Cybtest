@@ -4,4 +4,8 @@ tool: gitleaks
 input: source
 mode: passive
 est_minutes: 1
-command: ["gitleaks", "dir", "{{ src }}", "--report-format", "sarif", "--report-path", "{{ out }}/gitleaks.sarif"]
+command: ["gitleaks", "dir", "{{ src }}", "--redact", "--no-banner", "--report-format", "sarif", "--report-path", "{{ out }}/gitleaks.sarif"]
+parser: sarif
+output: "{{ out }}/gitleaks.sarif"
+severity: high
+timeout_minutes: 10

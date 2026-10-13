@@ -112,7 +112,7 @@ pub fn build_plan(k: &Knowledge, tags: &[String], url: Option<&str>) -> Vec<Plan
 }
 
 #[derive(Debug)]
-pub struct ApiError(StatusCode, String);
+pub struct ApiError(pub StatusCode, pub String);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -120,7 +120,7 @@ impl IntoResponse for ApiError {
     }
 }
 
-fn bad_request(msg: impl Into<String>) -> ApiError {
+pub fn bad_request(msg: impl Into<String>) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, msg.into())
 }
 

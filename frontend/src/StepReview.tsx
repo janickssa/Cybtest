@@ -10,11 +10,13 @@ interface Props {
   hasSource: boolean;
   onBack: () => void;
   onExport: () => void;
+  onRun: () => void;
+  canRun: boolean;
   busy: boolean;
 }
 
 const StepReview = forwardRef<HTMLInputElement, Props>(function StepReview(
-  { plan, selected, setSelected, url, hasSource, onBack, onExport, busy },
+  { plan, selected, setSelected, url, hasSource, onBack, onExport, onRun, canRun, busy },
   searchRef,
 ) {
   const [search, setSearch] = useState("");
@@ -66,6 +68,7 @@ const StepReview = forwardRef<HTMLInputElement, Props>(function StepReview(
 
   const chosen = plan.filter((i) => selected.has(i.rule_id));
   const minutes = chosen.flatMap((i) => i.actions).reduce((sum, a) => sum + a.est_minutes, 0);
+  const runnable = chosen.filter((i) => hasSource && i.actions.some((a) => a.input === "source" && a.mode === "passive"));
   const automated = visible.filter((i) => i.actions.length > 0);
   const manual = visible.filter((i) => i.actions.length === 0);
 
@@ -196,12 +199,19 @@ const StepReview = forwardRef<HTMLInputElement, Props>(function StepReview(
           <span className="flex-1 text-sm text-slate-600 dark:text-slate-400">
             {chosen.length} selected{minutes > 0 && ` · ~${minutes} min automated`}
           </span>
-          <Button variant="primary" disabled={chosen.length === 0 || busy} onClick={onExport}>
-            {busy ? "Exporting…" : "Export plan (Markdown)"}
+          <Button disabled={chosen.length === 0 || busy} onClick={onExport}>
+            Export plan
           </Button>
+          {canRun && (
+            <Button variant="primary" disabled={runnable.length === 0 || busy} onClick={onRun}>
+              {busy ? "Starting…" : `Approve & run ${runnable.length} →`}
+            </Button>
+          )}
         </div>
         <p className="mt-1 text-xs text-slate-500">
-          Running tests from the UI arrives in a later version. Export the plan to run the commands yourself.
+          {hasSource
+            ? "Code tests run on the isolated runner. URL and manual tests are included in the exported plan; running URL tests arrives in a later version."
+            : "Upload the project in step 1 to run code tests here. Otherwise, export the plan and run the commands yourself."}
         </p>
       </div>
     </div>

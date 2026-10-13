@@ -379,9 +379,9 @@ sectestgen/
 │           ├── unpack.rs      # safe zip extraction
 │           ├── detect.rs      # stack detection from files
 │           ├── recon.rs       # passive URL fingerprinting
-│           ├── execute.rs     # systemd-run with limits
+│           ├── execute.rs     # tool processes with timeouts, clean environment
 │           ├── scope.rs       # second allowlist check
-│           └── parsers/       # sarif, zap, nuclei, gitleaks, ...
+│           └── parsers.rs     # SARIF, cargo-audit JSON → findings
 ├── frontend/                  # React UI
 ├── rules/                     # YAML rule base
 ├── catalog/                   # YAML tool actions
@@ -430,7 +430,11 @@ scp -r catalog deploy/runner root@<runner-ip>:/opt/sectestgen-runner/
 ssh root@<runner-ip> 'bash /opt/sectestgen-runner/runner/install.sh'
 ```
 
-`install-tools.sh` (called by the runner install) installs Semgrep, gitleaks, osv-scanner, cargo-audit, Trivy, OWASP ZAP (with Java), nuclei and testssl.sh at pinned versions.
+The runner install generates a TLS certificate and a random token, then prints the two commands that connect the app to it (copy `cert.pem` to the app, then run `deploy/app/connect-runner.sh`).
+
+`install-tools.sh` (called by the runner install) installs Semgrep, gitleaks, osv-scanner, cargo-audit and Trivy at pinned versions and checks each download's SHA-256. OWASP ZAP, nuclei and testssl.sh are added with URL scanning (Phase 3).
+
+Scans run as the runner's own unprivileged user with a timeout per tool and an empty environment (only `PATH`, `HOME` and cache paths), so the runner's token never reaches a tool. The systemd unit caps memory and process count for the runner and all scans together.
 
 **App settings** (`/etc/sectestgen/sectestgen.env`, permissions `600`):
 
@@ -467,7 +471,16 @@ cargo test                                         # rules, plan builder, login
 
 Or run the UI from the app itself: `cd frontend && npm run build`, then open http://localhost:8080.
 
-The runner (`cargo run -p runner`) arrives in Phase 2.
+To run scans locally, start the runner too. It needs the tools on its `TOOLS_PATH`
+(`TOOLS_DIR=$PWD/.tools bash deploy/runner/install-tools.sh` installs them without root):
+
+```bash
+export RUNNER_TOKEN=$(openssl rand -hex 32)
+RUNNER_TOKEN=$RUNNER_TOKEN TOOLS_PATH=$PWD/.tools/bin:/usr/bin:/bin cargo run -p runner   # http://127.0.0.1:9090
+RUNNER_URL=http://127.0.0.1:9090 RUNNER_TOKEN=$RUNNER_TOKEN cargo run -p app             # in another shell, with the .env above
+```
+
+Without `TLS_CERT`/`TLS_KEY` the runner serves plain HTTP; that's for local development only.
 
 ---
 
@@ -490,9 +503,9 @@ The runner (`cargo run -p runner`) arrives in Phase 2.
 - [x] Single-user login, LXC install for the app container
 
 **Phase 2 – Code uploads**
-- [ ] Runner container with safe zip extraction and stack detection
-- [ ] Passive code actions: Semgrep, gitleaks, osv-scanner, cargo-audit, Trivy
-- [ ] Approve-and-run flow, live logs, findings view
+- [x] Runner container with safe zip extraction and stack detection
+- [x] Passive code actions: Semgrep, gitleaks, osv-scanner, cargo-audit, Trivy
+- [x] Approve-and-run flow, live logs, findings view
 
 **Phase 3 – URL targets**
 - [ ] Allowlist and scope enforcement in app and runner

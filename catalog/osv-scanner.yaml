@@ -4,4 +4,7 @@ tool: osv-scanner
 input: source
 mode: passive
 est_minutes: 1
-command: ["osv-scanner", "scan", "source", "--recursive", "--format", "sarif", "--output", "{{ out }}/osv.sarif", "{{ src }}"]
+command: ["osv-scanner", "scan", "source", "--recursive", "--format", "sarif", "--output-file", "{{ out }}/osv.sarif", "{{ src }}"]
+parser: sarif
+output: "{{ out }}/osv.sarif"
+timeout_minutes: 10

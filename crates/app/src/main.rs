@@ -2,12 +2,14 @@ mod auth;
 mod export;
 mod plan;
 mod rules;
+mod runner;
+mod runs;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::FromRef;
+use axum::extract::{DefaultBodyLimit, FromRef};
 use axum::routing::{get, post};
 use axum::{middleware, Json, Router};
 use serde_json::{json, Value};
@@ -20,9 +22,11 @@ use rules::Knowledge;
 pub struct AppState {
     auth: Auth,
     knowledge: Arc<Knowledge>,
+    runner: Option<Arc<runner::RunnerClient>>,
+    runs: Arc<runs::Runs>,
 }
 
-pub fn router(state: AppState, frontend_dir: Option<PathBuf>) -> Router {
+pub fn router(state: AppState, frontend_dir: Option<PathBuf>, max_upload: usize) -> Router {
     let protected = Router::new()
         .route(
             "/api/me",
@@ -32,6 +36,14 @@ pub fn router(state: AppState, frontend_dir: Option<PathBuf>) -> Router {
         .route("/api/analyze", post(plan::analyze))
         .route("/api/plan", post(plan::plan))
         .route("/api/export/markdown", post(plan::export_markdown))
+        .route(
+            "/api/upload",
+            post(runs::upload).layer(DefaultBodyLimit::max(max_upload)),
+        )
+        .route("/api/runs", post(runs::create_run))
+        .route("/api/runs/{id}", get(runs::get_run))
+        .route("/api/runs/{id}/stop", post(runs::stop_run))
+        .route("/api/runs/{id}/jobs/{job_id}/stop", post(runs::stop_job))
         .route_layer(middleware::from_fn_with_state(
             state.auth.clone(),
             auth::require_session,
@@ -104,19 +116,35 @@ async fn main() {
     if frontend_dir.is_none() {
         tracing::warn!("frontend not found (set FRONTEND_DIR); serving the API only");
     }
+    let runner = runner::RunnerClient::from_env().unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
+    if runner.is_none() {
+        tracing::warn!("RUNNER_URL not set: plans can be exported but not run");
+    }
+    let max_upload_mb: usize = std::env::var("MAX_UPLOAD_MB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200);
     let state = AppState {
         auth,
         knowledge: Arc::new(knowledge),
+        runner: runner.map(Arc::new),
+        runs: Arc::default(),
     };
 
     let listener = tokio::net::TcpListener::bind(bind).await.expect("bind");
     tracing::info!("listening on http://{bind}");
-    axum::serve(listener, router(state, frontend_dir))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .expect("server");
+    axum::serve(
+        listener,
+        router(state, frontend_dir, max_upload_mb * 1024 * 1024),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await
+    .expect("server");
 }
 
 #[cfg(test)]
@@ -133,8 +161,10 @@ mod tests {
             knowledge: Arc::new(
                 Knowledge::load(&root.join("rules"), &root.join("catalog")).unwrap(),
             ),
+            runner: None,
+            runs: Arc::default(),
         };
-        router(state, None)
+        router(state, None, 1024 * 1024)
     }
 
     fn login_req(password: &str) -> Request<Body> {

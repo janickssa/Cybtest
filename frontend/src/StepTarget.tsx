@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, type DetectedTag, type TagDef } from "./api";
+import { api, type DetectedTag, type TagDef, type Upload } from "./api";
 import { Button, Card, ErrorNote, inputClass } from "./ui";
 
 export interface Target {
@@ -15,23 +15,52 @@ interface Props {
   setTarget: (t: Target) => void;
   tags: DetectedTag[] | null;
   setTags: (t: DetectedTag[] | null) => void;
+  upload: (Upload & { name: string }) | null;
+  setUpload: (u: (Upload & { name: string }) | null) => void;
   onContinue: () => void;
   busy: boolean;
   error: string | null;
   onError: (e: unknown) => void;
 }
 
-export default function StepTarget({ target, setTarget, tags, setTags, onContinue, busy, error, onError }: Props) {
+function formatSize(bytes: number) {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} kB`;
+}
+
+export default function StepTarget({ target, setTarget, tags, setTags, upload, setUpload, onContinue, busy, error, onError }: Props) {
   const [vocabulary, setVocabulary] = useState<TagDef[]>([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [picking, setPicking] = useState(false);
   const [search, setSearch] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   useEffect(() => {
     api.tags().then(setVocabulary, onError);
   }, [onError]);
 
   const hasInput = target.url.trim() !== "" || target.description.trim() !== "";
+
+  async function uploadFile(file: File) {
+    if (!file.name.toLowerCase().endsWith(".zip")) {
+      setUploadError("Choose a .zip file.");
+      return;
+    }
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const result = await api.upload(file);
+      setUpload({ ...result, name: file.name });
+      const current = tags ?? [];
+      setTags([...current, ...result.tags.filter((t) => !current.some((c) => c.id === t.id))]);
+    } catch (e) {
+      if (e instanceof Error && !("status" in e && e.status === 401)) setUploadError(e.message);
+      else onError(e);
+    } finally {
+      setUploading(false);
+    }
+  }
 
   async function analyze() {
     setAnalyzing(true);
@@ -86,9 +115,56 @@ export default function StepTarget({ target, setTarget, tags, setTags, onContinu
           />
         </div>
 
-        <div className="rounded-lg border border-dashed border-slate-300 px-4 py-3 text-sm text-slate-500 dark:border-slate-700">
-          📦 Project upload (.zip) arrives in a later version. For now, describe the project below
-          and add the <em>Source code available</em> tag if you have the code.
+        <div className="space-y-2">
+          <span className="text-sm font-medium">📦 Upload project <span className="font-normal text-slate-500">(optional)</span></span>
+          {upload ? (
+            <div className="flex items-center gap-3 rounded-lg bg-green-50 px-4 py-3 text-sm dark:bg-green-950">
+              <span className="flex-1">
+                ✅ {upload.name} ({formatSize(upload.total_bytes)}, {upload.file_count.toLocaleString("da-DK")} files)
+              </span>
+              <Button variant="ghost" className="!py-1" onClick={() => setUpload(null)}>
+                Remove
+              </Button>
+            </div>
+          ) : (
+            <label
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                const file = e.dataTransfer.files[0];
+                if (file) uploadFile(file);
+              }}
+              className={`flex cursor-pointer flex-col items-center rounded-lg border-2 border-dashed px-4 py-6 text-center text-sm transition focus-within:outline-2 focus-within:outline-indigo-500 ${
+                dragging ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950" : "border-slate-300 dark:border-slate-700"
+              }`}
+            >
+              <input
+                type="file"
+                accept=".zip,application/zip"
+                className="sr-only"
+                disabled={uploading}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) uploadFile(file);
+                  e.target.value = "";
+                }}
+              />
+              {uploading ? (
+                <span>Uploading and analyzing…</span>
+              ) : (
+                <>
+                  <span>Drop project.zip here or click to browse</span>
+                  <span className="text-xs text-slate-500">The code is analyzed and scanned, never built or run.</span>
+                </>
+              )}
+            </label>
+          )}
+          <ErrorNote message={uploadError} />
         </div>
 
         <div className="space-y-1">
@@ -122,7 +198,7 @@ export default function StepTarget({ target, setTarget, tags, setTags, onContinu
 
         {tags === null && (
           <div className="flex justify-end">
-            <Button variant="primary" disabled={!hasInput || analyzing} onClick={analyze}>
+            <Button variant="primary" disabled={!hasInput || analyzing || uploading} onClick={analyze}>
               {analyzing ? "Analyzing…" : "Analyze →"}
             </Button>
           </div>

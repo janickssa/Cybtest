@@ -1,0 +1,34 @@
+[Unit]
+Description=SecTestGen runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=sectestgen-runner
+Group=sectestgen-runner
+EnvironmentFile=/etc/sectestgen-runner/runner.env
+WorkingDirectory=/var/lib/sectestgen-runner
+ExecStart=/usr/local/bin/sectestgen-runner
+Restart=on-failure
+
+# Limits for the runner and every scan it starts
+MemoryMax=3500M
+TasksMax=1024
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/sectestgen-runner
+
+[Install]
+WantedBy=multi-user.target
