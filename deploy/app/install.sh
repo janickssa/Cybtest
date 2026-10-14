@@ -38,6 +38,7 @@ RULES_DIR=$OPT/rules
 CATALOG_DIR=$OPT/catalog
 FRONTEND_DIR=$OPT/dist
 DATA_DIR=/var/lib/sectestgen
+DATABASE_URL=sqlite:///var/lib/sectestgen/sectestgen.db
 SCOPE_ALLOWLIST=$allowlist
 CONF
   chmod 600 "$ENV_FILE"

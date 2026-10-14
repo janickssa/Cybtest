@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, type DetectedTag, type PlanItem, type RunState, type ScopeStatus, type Upload } from "./api";
+import { api, ApiError, type DetectedTag, type PlanItem, type ProjectDetail, type RunState, type ScopeStatus, type Upload } from "./api";
 import Login from "./Login";
+import ProjectsView from "./ProjectsView";
 import StepResults from "./StepResults";
 import StepReview from "./StepReview";
 import StepRun from "./StepRun";
@@ -44,6 +45,8 @@ export default function App() {
   const [tags, setTags] = useState<DetectedTag[] | null>(null);
   const [upload, setUpload] = useState<(Upload & { name: string }) | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
+  const [view, setView] = useState<"wizard" | "projects">("wizard");
+  const [projectId, setProjectId] = useState<string | null>(null);
   const [run, setRun] = useState<RunState | null>(null);
   const [plan, setPlan] = useState<PlanItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -121,15 +124,23 @@ export default function App() {
     setBusy(true);
     setError(null);
     try {
-      const { run_id } = await api.startRun({
-        workspace_id: upload?.workspace_id ?? null,
-        url: target.url,
-        tags: tags.map((t) => t.id),
+      const { run_id, project_id } = await api.startRun({
+        project_id: projectId,
+        project: {
+          name: target.name,
+          url: target.url,
+          description: target.description,
+          rps: target.rps,
+          tags,
+          upload: upload
+            ? { workspace_id: upload.workspace_id, name: upload.name, file_count: upload.file_count, total_bytes: upload.total_bytes }
+            : null,
+        },
         selected: [...selected],
-        rate_limit_rps: target.rps,
         // Active tests were confirmed by typing the hostname when they were selected.
         confirm_host: hasActive ? host : null,
       });
+      setProjectId(project_id);
       setRun(null);
       setRunId(run_id);
       setStep(3);
@@ -139,7 +150,72 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  }, [tags, upload, selected, target.url, target.rps, scope, plan, onError]);
+  }, [tags, upload, selected, target, scope, plan, projectId, onError]);
+
+  const resetWizard = useCallback(() => {
+    setProjectId(null);
+    setTarget({ name: "", url: "", description: "", rps: 10 });
+    setTags(null);
+    setUpload(null);
+    setScope(null);
+    setPlan([]);
+    setSelected(new Set());
+    setRun(null);
+    setRunId(null);
+    setError(null);
+    setStep(1);
+    setView("wizard");
+  }, []);
+
+  const loadProject = useCallback((detail: ProjectDetail) => {
+    const p = detail.project;
+    setProjectId(detail.id);
+    setTarget({ name: p.name, url: p.url, description: p.description, rps: p.rps });
+    setTags(p.tags);
+    setUpload(p.upload ? { ...p.upload, tags: [] } : null);
+    setScope(null);
+    setPlan([]);
+    setRun(null);
+    setRunId(null);
+    setError(null);
+    setStep(1);
+    setView("wizard");
+  }, []);
+
+  const openRun = useCallback(
+    async (id: string, runToOpen: string) => {
+      try {
+        const detail = await api.project(id);
+        loadProject(detail);
+        const [state, items] = await Promise.all([
+          api.run(runToOpen),
+          api.plan(
+            detail.project.tags.map((t) => t.id),
+            detail.project.url,
+          ),
+        ]);
+        // Re-run the same tests, except active ones: those need a fresh confirmation in the plan.
+        const titles = new Set(state.jobs.flatMap((j) => j.tests));
+        setPlan(items);
+        setSelected(new Set(items.filter((i) => titles.has(i.title) && !i.active).map((i) => i.rule_id)));
+        setRun(state);
+        setRunId(runToOpen);
+        setStep(4);
+      } catch (e) {
+        onError(e);
+      }
+    },
+    [loadProject, onError],
+  );
+
+  const reloadRun = useCallback(async () => {
+    if (!runId) return;
+    try {
+      setRun(await api.run(runId));
+    } catch (e) {
+      onError(e);
+    }
+  }, [runId, onError]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -169,16 +245,29 @@ export default function App() {
     <div className="mx-auto max-w-4xl px-4 pb-8">
       <header className="flex items-center justify-between py-5">
         <h1 className="text-lg font-semibold">SecTestGen</h1>
-        <Button variant="ghost" onClick={logout}>
-          Log out
-        </Button>
+        <nav className="flex gap-1" aria-label="Main">
+          <Button variant="ghost" aria-current={view === "projects" ? "page" : undefined} onClick={() => setView("projects")}>
+            Projects
+          </Button>
+          <Button variant="ghost" onClick={resetWizard}>
+            New project
+          </Button>
+          <Button variant="ghost" onClick={logout}>
+            Log out
+          </Button>
+        </nav>
       </header>
       <p className="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-300">
         ⚠️ Only test systems you own or have explicit written permission to test.
       </p>
+      {view === "projects" ? (
+        <ProjectsView onOpen={loadProject} onOpenRun={openRun} onNew={resetWizard} onError={onError} />
+      ) : (
+        <>
       <nav aria-label="Progress" className="mb-6">
         <Stepper step={step} />
       </nav>
+      {target.name && projectId && <p className="-mt-3 mb-4 text-sm text-slate-500">Project: {target.name}</p>}
       {step === 1 ? (
         <StepTarget
           target={target}
@@ -224,13 +313,16 @@ export default function App() {
           <StepResults
             ref={searchRef}
             run={run}
-            projectName={target.name}
-            onBack={() => setStep(2)}
+            onBack={() => (plan.length ? setStep(2) : buildPlan())}
             onRerun={startRun}
+            onChanged={reloadRun}
+            onError={onError}
             busy={busy}
           />
         </>
       ) : null}
+        </>
+      )}
     </div>
   );
 }

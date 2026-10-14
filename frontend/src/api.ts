@@ -78,19 +78,86 @@ export interface RunJob {
   finding_count: number;
 }
 
+export interface Triage {
+  status: "false_positive" | "accepted_risk";
+  note: string;
+}
+
+export interface FindingView extends Finding {
+  fingerprint: string;
+  is_new: boolean;
+  triage: Triage | null;
+}
+
+export interface Comparison {
+  previous_run_id: string;
+  previous_created_at: number;
+  new_count: number;
+  unchanged_count: number;
+  fixed: Finding[];
+}
+
 export interface RunState {
   run_id: string;
+  project_id: string;
+  project_name: string;
+  created_at: number;
   finished: boolean;
   jobs: RunJob[];
-  findings: Finding[];
+  findings: FindingView[];
+  comparison: Comparison | null;
+}
+
+export interface UploadInfo {
+  workspace_id: string;
+  name: string;
+  file_count: number;
+  total_bytes: number;
+}
+
+export interface ProjectData {
+  name: string;
+  url: string;
+  description: string;
+  rps: number;
+  tags: DetectedTag[];
+  upload: UploadInfo | null;
+}
+
+export interface Counts {
+  high: number;
+  medium: number;
+  low: number;
+  info: number;
+}
+
+export interface RunSummary {
+  id: string;
+  created_at: number;
+  finished: boolean;
+  counts: Counts | null;
+}
+
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  url: string;
+  tags: string[];
+  upload_name: string | null;
+  updated_at: number;
+  last_run: RunSummary | null;
+}
+
+export interface ProjectDetail {
+  id: string;
+  project: ProjectData;
+  runs: RunSummary[];
 }
 
 export interface RunRequest {
-  workspace_id: string | null;
-  url: string;
-  tags: string[];
+  project_id: string | null;
+  project: ProjectData;
   selected: string[];
-  rate_limit_rps: number;
   confirm_host: string | null;
 }
 
@@ -144,7 +211,17 @@ export const api = {
   plan: async (tags: string[], url: string): Promise<PlanItem[]> =>
     (await request("/api/plan", { tags, url })).json(),
   upload: async (file: File): Promise<Upload> => (await request("/api/upload", file)).json(),
-  startRun: async (req: RunRequest): Promise<{ run_id: string }> => (await request("/api/runs", req)).json(),
+  startRun: async (req: RunRequest): Promise<{ run_id: string; project_id: string }> =>
+    (await request("/api/runs", req)).json(),
+  projects: async (): Promise<ProjectSummary[]> => (await request("/api/projects")).json(),
+  project: async (id: string): Promise<ProjectDetail> => (await request(`/api/projects/${id}`)).json(),
+  deleteProject: async (id: string) => {
+    const res = await fetch(`/api/projects/${id}`, { method: "DELETE", credentials: "same-origin" });
+    if (!res.ok) throw new ApiError(res.status, "Could not delete the project");
+  },
+  setTriage: (projectId: string, fingerprint: string, status: Triage["status"] | null, note = "") =>
+    request(`/api/projects/${projectId}/triage`, { fingerprint, status, note }),
+  sarif: async (runId: string): Promise<Blob> => (await request(`/api/runs/${runId}/export/sarif`)).blob(),
   run: async (id: string): Promise<RunState> => (await request(`/api/runs/${id}`)).json(),
   stopRun: (id: string) => request(`/api/runs/${id}/stop`, {}),
   stopJob: (id: string, jobId: string) => request(`/api/runs/${id}/jobs/${jobId}/stop`, {}),

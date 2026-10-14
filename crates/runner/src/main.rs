@@ -3,6 +3,7 @@
 
 mod detect;
 mod execute;
+mod mobile;
 mod parsers;
 mod recon;
 mod unpack;

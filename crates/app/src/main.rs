@@ -1,5 +1,7 @@
 mod auth;
+mod db;
 mod export;
+mod history;
 mod plan;
 mod rules;
 mod runner;
@@ -23,7 +25,7 @@ pub struct AppState {
     auth: Auth,
     knowledge: Arc<Knowledge>,
     runner: Option<Arc<runner::RunnerClient>>,
-    runs: Arc<runs::Runs>,
+    db: db::Db,
     scope: Arc<common::Scope>,
 }
 
@@ -45,6 +47,13 @@ pub fn router(state: AppState, frontend_dir: Option<PathBuf>, max_upload: usize)
         .route("/api/runs/{id}", get(runs::get_run))
         .route("/api/runs/{id}/stop", post(runs::stop_run))
         .route("/api/runs/{id}/jobs/{job_id}/stop", post(runs::stop_job))
+        .route("/api/runs/{id}/export/sarif", get(history::export_sarif))
+        .route("/api/projects", get(history::list_projects))
+        .route(
+            "/api/projects/{id}",
+            get(history::get_project).delete(history::delete_project),
+        )
+        .route("/api/projects/{id}/triage", post(history::set_triage))
         .route_layer(middleware::from_fn_with_state(
             state.auth.clone(),
             auth::require_session,
@@ -136,11 +145,17 @@ async fn main() {
     if scope.is_empty() {
         tracing::warn!("SCOPE_ALLOWLIST is empty: URL tests can be planned but not run");
     }
+    let database_url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://sectestgen.db".into());
+    let database = db::connect(&database_url).await.unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
     let state = AppState {
         auth,
         knowledge: Arc::new(knowledge),
         runner: runner.map(Arc::new),
-        runs: Arc::default(),
+        db: database,
         scope: Arc::new(scope),
     };
 
@@ -164,7 +179,7 @@ mod tests {
     use axum::http::{header, Request, StatusCode};
     use tower::ServiceExt;
 
-    fn app() -> Router {
+    async fn app() -> Router {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let state = AppState {
             auth: Auth::new(auth::hash_password("secret"), false).unwrap(),
@@ -172,7 +187,7 @@ mod tests {
                 Knowledge::load(&root.join("rules"), &root.join("catalog")).unwrap(),
             ),
             runner: None,
-            runs: Arc::default(),
+            db: db::connect("sqlite::memory:").await.unwrap(),
             scope: Arc::default(),
         };
         router(state, None, 1024 * 1024)
@@ -188,6 +203,7 @@ mod tests {
     #[tokio::test]
     async fn health_is_public() {
         let res = app()
+            .await
             .oneshot(Request::get("/api/health").body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -197,6 +213,7 @@ mod tests {
     #[tokio::test]
     async fn me_requires_login() {
         let res = app()
+            .await
             .oneshot(Request::get("/api/me").body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -205,13 +222,13 @@ mod tests {
 
     #[tokio::test]
     async fn wrong_password_is_rejected() {
-        let res = app().oneshot(login_req("nope")).await.unwrap();
+        let res = app().await.oneshot(login_req("nope")).await.unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn login_then_me_then_logout() {
-        let app = app();
+        let app = app().await;
         let res = app.clone().oneshot(login_req("secret")).await.unwrap();
         assert_eq!(res.status(), StatusCode::NO_CONTENT);
         let set_cookie = res.headers()[header::SET_COOKIE].to_str().unwrap();

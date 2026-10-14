@@ -1,0 +1,9 @@
+id: builtin-mobile-config
+title: Mobile app configuration check
+tool: built-in
+input: source
+mode: passive
+est_minutes: 1
+# Reads AndroidManifest.xml and Info.plist files; runs inside the runner.
+command: ["builtin:mobile-config"]
+timeout_minutes: 2

@@ -289,10 +289,23 @@ async fn run_builtin(
     job: &Arc<Job>,
     name: &str,
     url: Option<&url::Url>,
+    src: &Path,
 ) -> Result<Vec<Finding>, String> {
-    let url = url.ok_or("This action needs a target URL")?;
     match name {
-        "cors" => crate::recon::cors(url, |line| job.log(line)).await,
+        "cors" => {
+            crate::recon::cors(url.ok_or("This action needs a target URL")?, |line| {
+                job.log(line)
+            })
+            .await
+        }
+        "mobile-config" => {
+            let src = src.to_path_buf();
+            let (findings, log) = tokio::task::spawn_blocking(move || crate::mobile::check(&src))
+                .await
+                .map_err(|e| e.to_string())?;
+            log.into_iter().for_each(|line| job.log(line));
+            Ok(findings)
+        }
         other => Err(format!("Unknown built-in check {other}")),
     }
 }
@@ -334,7 +347,7 @@ async fn run(job: &Arc<Job>, spec: &JobSpec, config: &ExecConfig, mut stop: watc
             spec.url.as_ref().map_or("?", |u| u.as_str())
         ));
         let result = tokio::select! {
-            r = run_builtin(job, name, spec.url.as_ref()) => r,
+            r = run_builtin(job, name, spec.url.as_ref(), &src) => r,
             _ = tokio::time::sleep(timeout) => Err(format!("Timed out after {} minutes", action.timeout_minutes)),
             _ = stopped(&mut stop) => return job.finish(JobStatus::Stopped, None),
         };

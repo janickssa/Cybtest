@@ -58,3 +58,6 @@
 - { id: "infra:terraform", label: Terraform, category: Infrastructure, keywords: [terraform, opentofu] }
 - { id: "ci:github-actions", label: GitHub Actions, category: Infrastructure, keywords: [github actions] }
 - { id: "ci:gitlab", label: GitLab CI, category: Infrastructure, keywords: [gitlab ci, gitlab-ci] }
+
+- { id: "mobile:android", label: Android app, category: Mobile, keywords: [android, apk] }
+- { id: "mobile:ios", label: iOS app, category: Mobile, keywords: [ios, iphone, ipad, xcode] }

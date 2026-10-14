@@ -1,0 +1,104 @@
+# Mobile apps, mapped to OWASP MASVS v2.
+
+- id: mobile-platform-config
+  title: Insecure app configuration (manifest / Info.plist)
+  when: { any: ["mobile:android", "mobile:ios"] }
+  severity: high
+  references: [MASVS-PLATFORM-1, MASVS-NETWORK-1, MASVS-RESILIENCE-2]
+  description: >
+    Checks AndroidManifest.xml for debuggable builds, backups of app data,
+    cleartext traffic and components other apps can call, and Info.plist for
+    App Transport Security exceptions.
+  expected_secure_behavior: Release builds aren't debuggable, backups and cleartext are off, only needed components are exported.
+  actions: [{ id: builtin-mobile-config, requires: [source] }]
+
+- id: mobile-secure-storage
+  title: Sensitive data stored insecurely on the device
+  when: { any: ["mobile:android", "mobile:ios"] }
+  severity: high
+  references: [MASVS-STORAGE-1]
+  description: >
+    Check where tokens, passwords and personal data are stored: SharedPreferences,
+    NSUserDefaults, SQLite, plain files and caches are readable on rooted or
+    backed-up devices. Look at the app's data directory on a test device.
+  expected_secure_behavior: Secrets are kept in the Android Keystore / iOS Keychain; other sensitive data is encrypted.
+
+- id: mobile-data-leaks
+  title: Sensitive data in logs, screenshots and the clipboard
+  when: { any: ["mobile:android", "mobile:ios"] }
+  severity: medium
+  references: [MASVS-STORAGE-2, MASVS-PLATFORM-3]
+  description: >
+    Use the app while watching logcat / the device console. Check whether
+    sensitive screens appear in the app switcher and whether secrets can be
+    copied to the clipboard.
+  expected_secure_behavior: No tokens or personal data in logs; sensitive screens are hidden in the app switcher.
+
+- id: mobile-network
+  title: TLS validation and certificate pinning
+  when: { any: ["mobile:android", "mobile:ios"] }
+  severity: high
+  references: [MASVS-NETWORK-1, MASVS-NETWORK-2]
+  description: >
+    Route the device through an intercepting proxy with an untrusted
+    certificate: the app must refuse the connection. For high-risk apps, check
+    that the backend certificate or key is pinned.
+  expected_secure_behavior: Connections fail with an untrusted certificate; no custom code disables certificate checks.
+
+- id: mobile-auth
+  title: Authentication and session handling in the app
+  when: { any: ["mobile:android", "mobile:ios"] }
+  severity: high
+  references: [MASVS-AUTH-1, MASVS-AUTH-2, MASVS-AUTH-3]
+  description: >
+    Check that authorization decisions happen on the backend, that local
+    biometric unlock is tied to a Keystore/Keychain key rather than a simple
+    true/false check, and that sessions end on logout and expire.
+  expected_secure_behavior: The backend enforces access; biometric unlock uses a crypto-backed key; tokens are revoked at logout.
+
+- id: mobile-crypto
+  title: Weak or hard-coded cryptography
+  when: { any: ["mobile:android", "mobile:ios"] }
+  severity: medium
+  references: [MASVS-CRYPTO-1, MASVS-CRYPTO-2]
+  description: Look for hard-coded keys, ECB mode, MD5/SHA-1 for security purposes and non-random IVs.
+  expected_secure_behavior: Platform crypto APIs with keys from the Keystore/Keychain; no keys in the code.
+  actions: [{ id: semgrep-scan, requires: [source] }, { id: gitleaks-scan, requires: [source] }]
+
+- id: mobile-webview-deeplinks
+  title: WebViews and deep links
+  when: { any: ["mobile:android", "mobile:ios"] }
+  severity: medium
+  references: [MASVS-PLATFORM-1, MASVS-PLATFORM-2]
+  description: >
+    Check that deep links validate their parameters, and that WebViews only
+    load trusted content and don't expose native bridges (addJavascriptInterface,
+    script message handlers) to untrusted pages.
+  expected_secure_behavior: Deep link input is validated; WebViews load only your own HTTPS content.
+
+- id: mobile-dependencies
+  title: Vulnerable libraries and SDKs in the app
+  when: { any: ["mobile:android", "mobile:ios"] }
+  severity: medium
+  references: [MASVS-CODE-3]
+  description: Third-party SDKs (analytics, ads, payments) are part of the app's attack surface. Check them against known vulnerabilities.
+  actions: [{ id: osv-scanner, requires: [source] }]
+
+- id: mobile-resilience
+  title: Tampering and reverse-engineering protection
+  when: { any: ["mobile:android", "mobile:ios"] }
+  severity: low
+  references: [MASVS-RESILIENCE-1, MASVS-RESILIENCE-3, MASVS-RESILIENCE-4]
+  description: >
+    For apps that need it (banking, DRM, games), check root/jailbreak and
+    debugger detection, obfuscation and integrity checks. These slow an
+    attacker down; they don't replace server-side security.
+  expected_secure_behavior: Protections match the app's risk; nothing security-critical relies on them alone.
+
+- id: mobile-privacy
+  title: Privacy and data minimization
+  when: { any: ["mobile:android", "mobile:ios"] }
+  severity: low
+  references: [MASVS-PRIVACY-1, MASVS-PRIVACY-2]
+  description: Review requested permissions, collected data and tracking SDKs against what the app actually needs and what the privacy policy says.
+  expected_secure_behavior: Only needed permissions; collected data matches the privacy policy and store declarations.

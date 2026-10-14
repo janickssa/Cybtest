@@ -167,7 +167,7 @@ impl Knowledge {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectedTag {
     pub id: String,
     pub label: String,

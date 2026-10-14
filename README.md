@@ -458,6 +458,8 @@ DEFAULT_RATE_LIMIT_RPS=10
 
 **Local AI:** run Ollama in a third container or VM (roughly 8–16 GB RAM for a 7–14B model, or GPU passthrough) and set `LOCAL_BASE_URL`.
 
+**Database:** projects, runs, triage decisions and the audit log live in one SQLite file (`DATABASE_URL`), created on first start. Uploaded code stays on the runner and expires with its workspace (`WORKSPACE_RETENTION_DAYS`); re-running an old project after that asks you to upload it again.
+
 **Backups:** only the app container needs backing up (`/var/lib/sectestgen/` and the env file). The runner can be recreated from the install script.
 
 **Simpler alternative:** app and runner can run in the same container for a quick start, but you lose the isolation between your data and the untrusted uploads, so two containers are recommended.
@@ -516,7 +518,13 @@ Without `TLS_CERT`/`TLS_KEY` the runner serves plain HTTP; that's for local deve
 - [x] Passive URL actions: fingerprinting, ZAP baseline, testssl.sh, nuclei (safe)
 - [x] Active ZAP scan with confirmation and rate limits
 
-**Phase 4 – AI and polish**
+**Phase 4 – History and polish**
+- [x] Saved projects and run history (SQLite), surviving restarts
+- [x] Run comparison: new, fixed and unchanged findings since the last run
+- [x] Mark findings as false positive or accepted risk, hidden in later runs
+- [x] SARIF export
+- [x] Mobile rules (MASVS) and Android/iOS project detection
+
+**Phase 5 – Later**
 - [ ] AI suggestions (Claude / OpenAI / local) with configurable data sharing
-- [ ] Run comparison, false-positive marking, SARIF export
-- [ ] Mobile rules (MASVS), authenticated scanning (login sessions for ZAP)
+- [ ] Authenticated scanning (login sessions for URL tests)

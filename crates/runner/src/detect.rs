@@ -219,6 +219,14 @@ pub fn detect(root: &Path) -> Vec<Tag> {
             };
             let name = entry.file_name().to_string_lossy().to_string();
             if kind.is_dir() {
+                if name.ends_with(".xcodeproj") || name.ends_with(".xcworkspace") {
+                    let rel = path
+                        .strip_prefix(root)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .to_string();
+                    found.add("mobile:ios", || format!("Xcode project {rel}"));
+                }
                 if !SKIP_DIRS.contains(&name.as_str()) {
                     stack.push(path);
                 }
@@ -292,12 +300,20 @@ fn inspect_file(found: &mut Found, path: &Path, name: &str, rel: &str) {
                 if text.contains("spring-boot") {
                     found.add("fw:spring", || format!("spring-boot found in {rel}"));
                 }
+                if text.contains("com.android.application") || text.contains("com.android.library")
+                {
+                    found.add("mobile:android", || {
+                        format!("Android Gradle plugin in {rel}")
+                    });
+                }
                 if text.contains("jjwt") {
                     found.add("auth:jwt", || format!("jjwt found in {rel}"));
                 }
             }
         }
         "go.mod" => found.add("lang:go", || format!("{rel} found")),
+        "androidmanifest.xml" => found.add("mobile:android", || format!("{rel} found")),
+        "info.plist" => found.add("mobile:ios", || format!("{rel} found")),
         "docker-compose.yml" | "docker-compose.yaml" | "compose.yml" | "compose.yaml" => {
             found.add("infra:docker", || format!("{rel} found"))
         }
