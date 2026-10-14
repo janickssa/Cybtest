@@ -1,6 +1,6 @@
 //! Turns tags into a ranked test plan, and the API endpoints around it.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -12,6 +12,7 @@ use serde_json::json;
 
 use crate::export;
 use crate::rules::{DetectedTag, Knowledge, Severity, TagDef};
+use crate::AppState;
 
 const MAX_DESCRIPTION: usize = 10_000;
 
@@ -149,15 +150,68 @@ pub struct AnalyzeRequest {
     url: String,
 }
 
+/// Whether the target URL may be scanned, shown next to the URL field.
+#[derive(Serialize)]
+pub struct ScopeStatus {
+    allowed: bool,
+    message: String,
+}
+
+#[derive(Serialize)]
+pub struct AnalyzeResponse {
+    tags: Vec<DetectedTag>,
+    scope: Option<ScopeStatus>,
+    /// Why the URL couldn't be fingerprinted, if it couldn't.
+    fingerprint_note: Option<String>,
+}
+
 pub async fn analyze(
-    State(k): State<Arc<Knowledge>>,
+    State(state): State<AppState>,
     Json(req): Json<AnalyzeRequest>,
-) -> Result<Json<Vec<DetectedTag>>, ApiError> {
+) -> Result<Json<AnalyzeResponse>, ApiError> {
     if req.description.len() > MAX_DESCRIPTION {
         return Err(bad_request("Description is too long"));
     }
     let url = parse_target_url(&req.url)?;
-    Ok(Json(k.detect(&req.description, url.as_ref())))
+    let mut found: BTreeMap<String, String> = state
+        .knowledge
+        .detect(&req.description, url.as_ref())
+        .into_iter()
+        .map(|t| (t.id, t.evidence))
+        .collect();
+    let (mut scope, mut fingerprint_note) = (None, None);
+    if let Some(url) = &url {
+        let check = state.scope.check_url(url).await;
+        scope = Some(ScopeStatus {
+            allowed: check.is_ok(),
+            message: match &check {
+                Ok(_) => "In the allowlist".into(),
+                Err(e) => format!("{e}. You can still export the plan, but URL tests can't run."),
+            },
+        });
+        match (&check, &state.runner) {
+            (Ok(_), Some(runner)) => match runner.fingerprint(url.as_str()).await {
+                Ok(tags) => {
+                    for tag in tags {
+                        found.entry(tag.id).or_insert(tag.evidence);
+                    }
+                }
+                Err(e) => {
+                    fingerprint_note = Some(format!("Couldn't fingerprint the site: {}", e.1))
+                }
+            },
+            (Ok(_), None) => {
+                fingerprint_note =
+                    Some("No runner configured, so the site wasn't fingerprinted.".into())
+            }
+            _ => {}
+        }
+    }
+    Ok(Json(AnalyzeResponse {
+        tags: state.knowledge.with_implied(found),
+        scope,
+        fingerprint_note,
+    }))
 }
 
 #[derive(Deserialize)]

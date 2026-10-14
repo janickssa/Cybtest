@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, type DetectedTag, type TagDef, type Upload } from "./api";
+import { api, type DetectedTag, type ScopeStatus, type TagDef, type Upload } from "./api";
 import { Button, Card, ErrorNote, inputClass } from "./ui";
 
 export interface Target {
   name: string;
   url: string;
   description: string;
+  /// Requests per second for URL tests.
+  rps: number;
 }
 
 export const MANUAL_EVIDENCE = "Added by you";
@@ -17,6 +19,8 @@ interface Props {
   setTags: (t: DetectedTag[] | null) => void;
   upload: (Upload & { name: string }) | null;
   setUpload: (u: (Upload & { name: string }) | null) => void;
+  scope: ScopeStatus | null;
+  setScope: (s: ScopeStatus | null) => void;
   onContinue: () => void;
   busy: boolean;
   error: string | null;
@@ -27,7 +31,20 @@ function formatSize(bytes: number) {
   return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} kB`;
 }
 
-export default function StepTarget({ target, setTarget, tags, setTags, upload, setUpload, onContinue, busy, error, onError }: Props) {
+export default function StepTarget({
+  target,
+  setTarget,
+  tags,
+  setTags,
+  upload,
+  setUpload,
+  scope,
+  setScope,
+  onContinue,
+  busy,
+  error,
+  onError,
+}: Props) {
   const [vocabulary, setVocabulary] = useState<TagDef[]>([]);
   const [analyzing, setAnalyzing] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -35,6 +52,7 @@ export default function StepTarget({ target, setTarget, tags, setTags, upload, s
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
   useEffect(() => {
     api.tags().then(setVocabulary, onError);
@@ -65,7 +83,11 @@ export default function StepTarget({ target, setTarget, tags, setTags, upload, s
   async function analyze() {
     setAnalyzing(true);
     try {
-      const detected = await api.analyze(target.description, target.url);
+      const result = await api.analyze(target.description, target.url);
+      setScope(result.scope);
+      setNote(result.fingerprint_note);
+      const fromUpload = upload?.tags ?? [];
+      const detected = [...result.tags, ...fromUpload.filter((t) => !result.tags.some((r) => r.id === t.id))];
       const manual = (tags ?? []).filter(
         (t) => t.evidence === MANUAL_EVIDENCE && !detected.some((d) => d.id === t.id),
       );
@@ -177,9 +199,34 @@ export default function StepTarget({ target, setTarget, tags, setTags, upload, s
             className={inputClass}
             placeholder="https://internaltest.example.dk"
             value={target.url}
-            onChange={(e) => setTarget({ ...target, url: e.target.value })}
+            onChange={(e) => {
+              setTarget({ ...target, url: e.target.value });
+              setScope(null);
+            }}
           />
-          <p className="text-xs text-slate-500">Nothing is sent to this URL in this version.</p>
+          {scope ? (
+            <p className={`text-xs ${scope.allowed ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}`}>
+              {scope.allowed ? "✅" : "⛔"} {scope.message}
+            </p>
+          ) : (
+            <p className="text-xs text-slate-500">
+              Analyze checks the URL against the allowlist and fingerprints it with one normal request.
+            </p>
+          )}
+          {note && <p className="text-xs text-amber-700 dark:text-amber-400">{note}</p>}
+          {target.url.trim() && (
+            <label className="flex items-center gap-2 pt-1 text-xs text-slate-600 dark:text-slate-400">
+              Max requests per second for URL tests
+              <input
+                type="number"
+                min={1}
+                max={50}
+                className={`${inputClass} !w-20 !py-1`}
+                value={target.rps}
+                onChange={(e) => setTarget({ ...target, rps: Math.min(50, Math.max(1, Number(e.target.value) || 1)) })}
+              />
+            </label>
+          )}
         </div>
 
         <div className="space-y-1">

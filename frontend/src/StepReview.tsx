@@ -8,15 +8,17 @@ interface Props {
   setSelected: (s: Set<string>) => void;
   url: string;
   hasSource: boolean;
+  rps: number;
   onBack: () => void;
   onExport: () => void;
   onRun: () => void;
   canRun: boolean;
+  urlAllowed: boolean;
   busy: boolean;
 }
 
 const StepReview = forwardRef<HTMLInputElement, Props>(function StepReview(
-  { plan, selected, setSelected, url, hasSource, onBack, onExport, onRun, canRun, busy },
+  { plan, selected, setSelected, url, hasSource, rps, onBack, onExport, onRun, canRun, urlAllowed, busy },
   searchRef,
 ) {
   const [search, setSearch] = useState("");
@@ -68,7 +70,9 @@ const StepReview = forwardRef<HTMLInputElement, Props>(function StepReview(
 
   const chosen = plan.filter((i) => selected.has(i.rule_id));
   const minutes = chosen.flatMap((i) => i.actions).reduce((sum, a) => sum + a.est_minutes, 0);
-  const runnable = chosen.filter((i) => hasSource && i.actions.some((a) => a.input === "source" && a.mode === "passive"));
+  const runnable = chosen.filter((i) =>
+    i.actions.some((a) => (a.input === "source" && hasSource && a.mode === "passive") || (a.input === "url" && urlAllowed)),
+  );
   const automated = visible.filter((i) => i.actions.length > 0);
   const manual = visible.filter((i) => i.actions.length === 0);
 
@@ -209,9 +213,10 @@ const StepReview = forwardRef<HTMLInputElement, Props>(function StepReview(
           )}
         </div>
         <p className="mt-1 text-xs text-slate-500">
-          {hasSource
-            ? "Code tests run on the isolated runner. URL and manual tests are included in the exported plan; running URL tests arrives in a later version."
-            : "Upload the project in step 1 to run code tests here. Otherwise, export the plan and run the commands yourself."}
+          {canRun
+            ? `Tests run on the isolated runner${urlAllowed ? `, URL tests at most ${rps} requests per second` : ""}. Manual tests are only in the exported plan.`
+            : "Upload the project or enter an allowed URL in step 1 to run tests here. Otherwise, export the plan and run the commands yourself."}
+          {url && !urlAllowed && canRun && " The URL isn't in the allowlist, so URL tests are skipped."}
         </p>
       </div>
     </div>

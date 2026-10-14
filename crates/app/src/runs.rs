@@ -125,11 +125,15 @@ pub async fn upload(
 
 #[derive(Deserialize)]
 pub struct RunRequest {
-    workspace_id: String,
+    #[serde(default)]
+    workspace_id: Option<String>,
     #[serde(default)]
     url: String,
     tags: Vec<String>,
     selected: Vec<String>,
+    rate_limit_rps: Option<u32>,
+    /// The hostname the user typed to confirm active tests.
+    confirm_host: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -142,17 +146,25 @@ pub async fn create_run(
     State(state): State<AppState>,
     Json(req): Json<RunRequest>,
 ) -> Result<Json<RunCreated>, ApiError> {
-    if !is_id(&req.workspace_id) {
-        return Err(bad_request("Upload the project first"));
-    }
+    let workspace = match req.workspace_id.as_deref().filter(|w| !w.is_empty()) {
+        Some(id) if is_id(id) => Some(id.to_string()),
+        Some(_) => return Err(bad_request("Invalid upload id")),
+        None => None,
+    };
     let runner = runner(&state)?;
     let url = parse_target_url(&req.url)?;
+    // URL tests are skipped (not refused) when the URL is out of scope, so code tests still run.
+    let url_scope = match &url {
+        Some(u) => state.scope.check_url(u).await.map(|_| ()),
+        None => Err("No target URL was given".to_string()),
+    };
     let selected: HashSet<&str> = req.selected.iter().map(String::as_str).collect();
     let plan = build_plan(
         &state.knowledge,
         &req.tags,
         url.as_ref().map(url::Url::as_str),
     );
+    let host = url.as_ref().and_then(|u| u.host_str()).unwrap_or_default();
 
     // One job per catalog action, even when several selected tests use it.
     let mut jobs: Vec<RunJob> = Vec::new();
@@ -160,11 +172,18 @@ pub async fn create_run(
         .iter()
         .filter(|i| selected.contains(i.rule_id.as_str()))
     {
-        for action in item
-            .actions
-            .iter()
-            .filter(|a| a.input == "source" && a.mode == "passive")
-        {
+        if item.active && url_scope.is_ok() && req.confirm_host.as_deref() != Some(host) {
+            return Err(bad_request(format!(
+                "\"{}\" is an active test. Confirm it by typing the hostname.",
+                item.title
+            )));
+        }
+        let runnable = item.actions.iter().filter(|a| match a.input.as_str() {
+            "source" => workspace.is_some() && a.mode == "passive",
+            "url" => url_scope.is_ok(),
+            _ => false,
+        });
+        for action in runnable {
             match jobs.iter_mut().find(|j| j.action_id == action.id) {
                 Some(job) => job.tests.push(item.title.clone()),
                 None => jobs.push(RunJob {
@@ -179,13 +198,30 @@ pub async fn create_run(
     }
     if jobs.is_empty() {
         return Err(bad_request(
-            "None of the selected tests can run automatically yet",
-        ));
+            match &url_scope {
+            Err(e) if url.is_some() => format!("None of the selected tests can run: {e}."),
+            _ => "None of the selected tests can run here. Upload the project or enter an allowed URL.".into(),
+        }));
     }
+    let needs_url = |action_id: &str| {
+        state
+            .knowledge
+            .catalog
+            .get(action_id)
+            .is_some_and(|a| a.input == "url")
+    };
     for i in 0..jobs.len() {
+        let is_url = needs_url(&jobs[i].action_id);
         let request = JobRequest {
-            workspace_id: req.workspace_id.clone(),
             action_id: jobs[i].action_id.clone(),
+            workspace_id: if is_url { None } else { workspace.clone() },
+            url: if is_url {
+                url.as_ref().map(|u| u.to_string())
+            } else {
+                None
+            },
+            rate_limit_rps: req.rate_limit_rps,
+            confirm_host: req.confirm_host.clone(),
         };
         match runner.start_job(&request).await {
             Ok(created) => jobs[i].job_id = created.job_id,
@@ -198,7 +234,7 @@ pub async fn create_run(
         }
     }
     let run_id = random_id();
-    tracing::info!(run = %run_id, jobs = jobs.len(), workspace = %req.workspace_id, "run approved");
+    tracing::info!(run = %run_id, jobs = jobs.len(), url = %req.url, workspace = ?workspace, "run approved");
     state.runs.insert(run_id.clone(), jobs.clone());
     Ok(Json(RunCreated { run_id, jobs }))
 }

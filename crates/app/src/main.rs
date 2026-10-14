@@ -24,6 +24,7 @@ pub struct AppState {
     knowledge: Arc<Knowledge>,
     runner: Option<Arc<runner::RunnerClient>>,
     runs: Arc<runs::Runs>,
+    scope: Arc<common::Scope>,
 }
 
 pub fn router(state: AppState, frontend_dir: Option<PathBuf>, max_upload: usize) -> Router {
@@ -127,11 +128,20 @@ async fn main() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(200);
+    let scope = common::Scope::parse(&std::env::var("SCOPE_ALLOWLIST").unwrap_or_default())
+        .unwrap_or_else(|e| {
+            eprintln!("SCOPE_ALLOWLIST: {e}");
+            std::process::exit(1);
+        });
+    if scope.is_empty() {
+        tracing::warn!("SCOPE_ALLOWLIST is empty: URL tests can be planned but not run");
+    }
     let state = AppState {
         auth,
         knowledge: Arc::new(knowledge),
         runner: runner.map(Arc::new),
         runs: Arc::default(),
+        scope: Arc::new(scope),
     };
 
     let listener = tokio::net::TcpListener::bind(bind).await.expect("bind");
@@ -163,6 +173,7 @@ mod tests {
             ),
             runner: None,
             runs: Arc::default(),
+            scope: Arc::default(),
         };
         router(state, None, 1024 * 1024)
     }

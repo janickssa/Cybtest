@@ -1,7 +1,0 @@
-id: builtin-jwt-checks
-title: JWT validation checks
-tool: built-in
-input: url
-mode: passive
-est_minutes: 1
-command: ["sectestgen-checks", "jwt", "--url", "{{ url }}", "--output", "{{ out }}/jwt.json"]

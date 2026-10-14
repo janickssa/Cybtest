@@ -6,6 +6,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+mod scope;
+pub use scope::Scope;
+
 /// A normalized technology tag with the evidence it was detected from,
 /// e.g. `fw:actix-web` found in `backend/Cargo.lock`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,7 +39,8 @@ pub struct CatalogAction {
     #[serde(default)]
     pub est_minutes: u32,
     /// Argument list, never run through a shell. Placeholders: `{{ src }}`,
-    /// `{{ out }}`, `{{ url }}`, `{{ cargo_lock }}`.
+    /// `{{ out }}`, `{{ url }}`, `{{ rps }}`, `{{ delay_ms }}`, `{{ cargo_lock }}`,
+    /// `{{ tools_dir }}`, and JSON-quoted `{{ url_q }}` / `{{ origin_regex_q }}` for files.
     pub command: Vec<String>,
     /// How to read the results: `sarif` or `cargo-audit`.
     pub parser: Option<String>,
@@ -50,6 +54,10 @@ pub struct CatalogAction {
     /// they find something; anything else is treated as a failed run.
     #[serde(default = "default_ok_exit_codes")]
     pub ok_exit_codes: Vec<i32>,
+    /// Files written to the output directory before the tool starts (e.g. a
+    /// ZAP automation plan), with the same placeholders as `command`.
+    #[serde(default)]
+    pub files: std::collections::BTreeMap<String, String>,
 }
 
 fn default_timeout() -> u64 {
@@ -132,11 +140,23 @@ pub struct WorkspaceInfo {
     pub tags: Vec<Tag>,
 }
 
-/// App → runner: start one catalog action on a workspace.
+/// App → runner: start one catalog action on an uploaded workspace or a URL.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobRequest {
-    pub workspace_id: String,
     pub action_id: String,
+    /// For `source` actions.
+    pub workspace_id: Option<String>,
+    /// For `url` actions; checked against the runner's own allowlist.
+    pub url: Option<String>,
+    pub rate_limit_rps: Option<u32>,
+    /// Active actions only run when this equals the URL's hostname.
+    pub confirm_host: Option<String>,
+}
+
+/// App → runner: passively fingerprint a URL.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FingerprintRequest {
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

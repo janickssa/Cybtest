@@ -4,4 +4,26 @@ tool: zap
 input: url
 mode: passive
 est_minutes: 5
-command: ["zap-baseline.py", "-t", "{{ url }}", "-J", "{{ out }}/zap-baseline.json"]
+# Spider the site, let ZAP's passive rules inspect the traffic, write a JSON report.
+command: ["zap.sh", "-cmd", "-silent", "-autorun", "{{ out }}/plan.yaml"]
+files:
+  plan.yaml: |
+    env:
+      contexts:
+        - name: target
+          urls: [{{ url_q }}]
+          includePaths: [{{ origin_regex_q }}]
+      parameters:
+        failOnError: true
+        progressToStdout: true
+    jobs:
+      - type: spider
+        parameters: { maxDuration: 3, threadCount: 2 }
+      - type: passiveScan-wait
+        parameters: { maxDuration: 5 }
+      - type: report
+        parameters: { template: traditional-json, reportDir: "{{ out }}", reportFile: zap.json }
+parser: zap-json
+output: "{{ out }}/zap.json"
+ok_exit_codes: [0, 2]
+timeout_minutes: 20

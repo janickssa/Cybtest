@@ -86,10 +86,23 @@ export interface RunState {
 }
 
 export interface RunRequest {
-  workspace_id: string;
+  workspace_id: string | null;
   url: string;
   tags: string[];
   selected: string[];
+  rate_limit_rps: number;
+  confirm_host: string | null;
+}
+
+export interface ScopeStatus {
+  allowed: boolean;
+  message: string;
+}
+
+export interface AnalyzeResult {
+  tags: DetectedTag[];
+  scope: ScopeStatus | null;
+  fingerprint_note: string | null;
 }
 
 export class ApiError extends Error {
@@ -126,7 +139,7 @@ export const api = {
   login: (password: string) => request("/api/login", { password }),
   logout: () => request("/api/logout", {}),
   tags: async (): Promise<TagDef[]> => (await request("/api/tags")).json(),
-  analyze: async (description: string, url: string): Promise<DetectedTag[]> =>
+  analyze: async (description: string, url: string): Promise<AnalyzeResult> =>
     (await request("/api/analyze", { description, url })).json(),
   plan: async (tags: string[], url: string): Promise<PlanItem[]> =>
     (await request("/api/plan", { tags, url })).json(),

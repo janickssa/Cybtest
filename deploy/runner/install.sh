@@ -15,7 +15,7 @@ for path in "$BIN" "$OPT/catalog" "$OPT/runner/sectestgen-runner.service" "$OPT/
 done
 
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl openssl python3-venv >/dev/null
+apt-get install -y -qq ca-certificates curl openssl python3-venv default-jre-headless testssl.sh >/dev/null
 TOOLS_DIR=$OPT/tools bash "$OPT/runner/install-tools.sh"
 
 id sectestgen-runner &>/dev/null || useradd --system --home "$DATA" --shell /usr/sbin/nologin sectestgen-runner
@@ -38,6 +38,9 @@ if [[ ! -f $CONF/tls/cert.pem ]]; then
 fi
 
 if [[ ! -f $CONF/runner.env ]]; then
+  echo "Which targets may be scanned? Hosts and networks, comma-separated,"
+  echo "e.g. *.schwabejss.dk,10.0.20.0/24. Use the same list on the app container."
+  read -rp "Allowlist: " allowlist
   umask 077
   cat > "$CONF/runner.env" <<CONFIG
 BIND_ADDR=0.0.0.0:9090
@@ -53,6 +56,10 @@ MAX_UNPACKED_MB=2048
 MAX_FILES=50000
 MAX_PARALLEL_JOBS=2
 WORKSPACE_RETENTION_DAYS=7
+TOOLS_DIR=$OPT/tools
+SCOPE_ALLOWLIST=$allowlist
+DEFAULT_RATE_LIMIT_RPS=10
+MAX_RATE_LIMIT_RPS=50
 CONFIG
   chmod 600 "$CONF/runner.env"
 fi
@@ -74,5 +81,7 @@ Connect the app container to it:
        scp $CONF/tls/cert.pem root@<app-ip>:/etc/sectestgen/runner-ca.pem
   2. On the app container, run:
        bash /opt/sectestgen/app/connect-runner.sh https://$ip:9090 $token
-  3. Allow only the app container to reach port 9090 (Proxmox/LXC firewall).
+  3. Allow only the app container to reach port 9090 (Proxmox/LXC firewall),
+     and limit the runner's outgoing traffic to your allowlisted targets and
+     the tools' update sources.
 NEXT

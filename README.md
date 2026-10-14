@@ -432,7 +432,11 @@ ssh root@<runner-ip> 'bash /opt/sectestgen-runner/runner/install.sh'
 
 The runner install generates a TLS certificate and a random token, then prints the two commands that connect the app to it (copy `cert.pem` to the app, then run `deploy/app/connect-runner.sh`).
 
-`install-tools.sh` (called by the runner install) installs Semgrep, gitleaks, osv-scanner, cargo-audit and Trivy at pinned versions and checks each download's SHA-256. OWASP ZAP, nuclei and testssl.sh are added with URL scanning (Phase 3).
+`install-tools.sh` (called by the runner install) installs Semgrep, gitleaks, osv-scanner, cargo-audit, Trivy, nuclei (plus its templates) and OWASP ZAP at pinned versions and checks each download's SHA-256. testssl.sh and Java (for ZAP) come from the distribution's packages.
+
+**Target allowlist:** both containers read `SCOPE_ALLOWLIST` from their env file (the install scripts ask for it), e.g. `SCOPE_ALLOWLIST=*.schwabejss.dk,10.0.20.0/24`. Keep the two lists identical; the runner refuses anything outside its own list even if the app asks. When networks are listed, every address a hostname resolves to must be inside one; without networks, loopback and link-local addresses are refused. To scan a site on the runner itself (e.g. a local test), list `127.0.0.1/32` explicitly.
+
+**Rate limits:** URL tests default to 10 requests per second (`DEFAULT_RATE_LIMIT_RPS`), adjustable per project in step 1 up to `MAX_RATE_LIMIT_RPS`. nuclei uses it directly (`-rl`) and the active ZAP scan as a delay between requests; ZAP's crawler uses two threads and testssl.sh makes a fixed, small number of TLS connections.
 
 Scans run as the runner's own unprivileged user with a timeout per tool and an empty environment (only `PATH`, `HOME` and cache paths), so the runner's token never reaches a tool. The systemd unit caps memory and process count for the runner and all scans together.
 
@@ -508,9 +512,9 @@ Without `TLS_CERT`/`TLS_KEY` the runner serves plain HTTP; that's for local deve
 - [x] Approve-and-run flow, live logs, findings view
 
 **Phase 3 – URL targets**
-- [ ] Allowlist and scope enforcement in app and runner
-- [ ] Passive URL actions: fingerprinting, ZAP baseline, testssl.sh, nuclei (safe)
-- [ ] Active ZAP scan with confirmation and rate limits
+- [x] Allowlist and scope enforcement in app and runner
+- [x] Passive URL actions: fingerprinting, ZAP baseline, testssl.sh, nuclei (safe)
+- [x] Active ZAP scan with confirmation and rate limits
 
 **Phase 4 – AI and polish**
 - [ ] AI suggestions (Claude / OpenAI / local) with configurable data sharing

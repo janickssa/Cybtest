@@ -17,6 +17,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "process", "time", "fs", "sync", "io-util"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 libc = "0.2"
+url = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rand = "0.8"
 hex = "0.4"
 tracing = "0.1"

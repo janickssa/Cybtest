@@ -32,12 +32,177 @@ fn truncate(text: &str, max: usize) -> String {
 }
 
 pub fn parse(parser: &str, data: &str, ctx: &Context) -> Result<Vec<Finding>, String> {
+    if parser == "nuclei-jsonl" {
+        return nuclei(data, ctx);
+    }
     let value: Value = serde_json::from_str(data).map_err(|e| format!("invalid JSON: {e}"))?;
     match parser {
         "sarif" => sarif(&value, ctx),
         "cargo-audit" => cargo_audit(&value, ctx),
+        "zap-json" => zap(&value, ctx),
+        "testssl-json" => testssl(&value, ctx),
         other => Err(format!("unknown parser {other}")),
     }
+}
+
+/// ZAP's HTML snippets (`<p>…</p>`) as plain text.
+fn strip_html(html: &str) -> String {
+    let text = html.replace("</p><p>", "\n").replace("<br>", "\n");
+    let mut out = String::with_capacity(text.len());
+    let mut in_tag = false;
+    for c in text.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&amp;", "&")
+}
+
+fn zap(doc: &Value, ctx: &Context) -> Result<Vec<Finding>, String> {
+    let sites = doc
+        .get("site")
+        .and_then(Value::as_array)
+        .ok_or("ZAP report without sites")?;
+    let mut findings = Vec::new();
+    for alert in sites
+        .iter()
+        .filter_map(|s| s.get("alerts")?.as_array())
+        .flatten()
+    {
+        let instances = alert
+            .get("instances")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let first = instances.first().cloned().unwrap_or(Value::Null);
+        let count: usize = text(alert, &["count"])
+            .and_then(|c| c.parse().ok())
+            .unwrap_or(instances.len());
+        let location = text(&first, &["uri"]).map(|uri| {
+            let param = text(&first, &["param"])
+                .map(|p| format!(" (parameter {p})"))
+                .unwrap_or_default();
+            let more = if count > 1 {
+                format!(" and {} more", count - 1)
+            } else {
+                String::new()
+            };
+            format!("{uri}{param}{more}")
+        });
+        let reference = text(alert, &["reference"]).map(strip_html);
+        findings.push(Finding {
+            tool: ctx.tool.to_string(),
+            rule_id: text(alert, &["alertRef"])
+                .or_else(|| text(alert, &["pluginid"]))
+                .unwrap_or("zap")
+                .to_string(),
+            title: text(alert, &["name"])
+                .or_else(|| text(alert, &["alert"]))
+                .unwrap_or("ZAP alert")
+                .to_string(),
+            severity: ctx.severity.unwrap_or(match text(alert, &["riskcode"]) {
+                Some("3") => Severity::High,
+                Some("2") => Severity::Medium,
+                Some("1") => Severity::Low,
+                _ => Severity::Info,
+            }),
+            location: location.or_else(|| ctx.default_location.clone()),
+            message: truncate(
+                strip_html(text(alert, &["desc"]).unwrap_or("")).trim(),
+                MAX_TEXT,
+            ),
+            snippet: text(&first, &["evidence"]).map(|e| truncate(e, 500)),
+            help: text(alert, &["solution"]).map(|h| truncate(strip_html(h).trim(), MAX_TEXT)),
+            help_url: reference.and_then(|r| {
+                r.split_whitespace()
+                    .find(|w| w.starts_with("http"))
+                    .map(str::to_string)
+            }),
+        });
+    }
+    Ok(findings)
+}
+
+fn nuclei(data: &str, ctx: &Context) -> Result<Vec<Finding>, String> {
+    let mut findings = Vec::new();
+    for line in data.lines().filter(|l| !l.trim().is_empty()) {
+        let v: Value =
+            serde_json::from_str(line).map_err(|e| format!("invalid nuclei JSON line: {e}"))?;
+        let info = &v["info"];
+        let extracted: Vec<&str> = v["extracted-results"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        findings.push(Finding {
+            tool: ctx.tool.to_string(),
+            rule_id: text(&v, &["template-id"]).unwrap_or("nuclei").to_string(),
+            title: text(info, &["name"]).unwrap_or("nuclei match").to_string(),
+            severity: ctx.severity.unwrap_or(match text(info, &["severity"]) {
+                Some("critical" | "high") => Severity::High,
+                Some("medium") => Severity::Medium,
+                Some("low") => Severity::Low,
+                _ => Severity::Info,
+            }),
+            location: text(&v, &["matched-at"])
+                .map(str::to_string)
+                .or_else(|| ctx.default_location.clone()),
+            message: truncate(text(info, &["description"]).unwrap_or("").trim(), MAX_TEXT),
+            snippet: (!extracted.is_empty()).then(|| truncate(&extracted.join("\n"), 500)),
+            help: text(info, &["remediation"]).map(|r| truncate(r.trim(), MAX_TEXT)),
+            help_url: info["reference"]
+                .as_array()
+                .and_then(|r| r.first())
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        });
+    }
+    Ok(findings)
+}
+
+fn testssl(doc: &Value, ctx: &Context) -> Result<Vec<Finding>, String> {
+    let items = doc.as_array().ok_or("testssl output is not a list")?;
+    let mut findings = Vec::new();
+    for item in items {
+        let severity = match text(item, &["severity"]) {
+            Some("CRITICAL" | "HIGH") => Severity::High,
+            Some("MEDIUM") => Severity::Medium,
+            Some("LOW") => Severity::Low,
+            _ => continue,
+        };
+        let id = text(item, &["id"]).unwrap_or("testssl");
+        let finding = text(item, &["finding"]).unwrap_or("");
+        let cve = text(item, &["cve"]);
+        findings.push(Finding {
+            tool: ctx.tool.to_string(),
+            rule_id: id.to_string(),
+            title: format!("{}: {}", humanize(id), truncate(finding, 120)),
+            severity: ctx.severity.unwrap_or(severity),
+            location: ctx.default_location.clone(),
+            message: [
+                Some(finding.to_string()),
+                cve.map(|c| format!("CVE: {c}")),
+                text(item, &["cwe"]).map(|c| format!("CWE: {c}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n"),
+            snippet: None,
+            help: None,
+            help_url: cve
+                .and_then(|c| c.split_whitespace().next())
+                .map(|c| format!("https://nvd.nist.gov/vuln/detail/{c}")),
+        });
+    }
+    Ok(findings)
 }
 
 fn text<'a>(v: &'a Value, path: &[&str]) -> Option<&'a str> {
@@ -289,6 +454,44 @@ mod tests {
         assert_eq!(f.snippet.as_deref(), Some("REDACTED"));
         let f = &parse("sarif", doc, &ctx(None)).unwrap()[0];
         assert_eq!(f.severity, Severity::Medium);
+    }
+
+    #[test]
+    fn parses_zap_nuclei_and_testssl() {
+        let zap_doc = r#"{"site":[{"@name":"http://t","alerts":[{"pluginid":"10038","alertRef":"10038-1",
+            "name":"Content Security Policy (CSP) Header Not Set","riskcode":"2","count":"7",
+            "desc":"<p>CSP is an added layer.</p>","solution":"<p>Set the header.</p>",
+            "reference":"<p>https://developer.mozilla.org/csp</p><p>https://owasp.org/x</p>",
+            "instances":[{"uri":"http://t/","method":"GET","param":"","evidence":""}]}]}]}"#;
+        let f = &parse("zap-json", zap_doc, &ctx(None)).unwrap()[0];
+        assert_eq!(f.severity, Severity::Medium);
+        assert_eq!(f.location.as_deref(), Some("http://t/ and 6 more"));
+        assert_eq!(f.message, "CSP is an added layer.");
+        assert_eq!(f.help.as_deref(), Some("Set the header."));
+        assert_eq!(
+            f.help_url.as_deref(),
+            Some("https://developer.mozilla.org/csp")
+        );
+        assert_eq!(f.snippet, None);
+
+        let jsonl = "{\"template-id\":\"php-powered-by\",\"info\":{\"name\":\"PHP version disclosed\",\"severity\":\"low\",\"remediation\":\"Remove it.\",\"reference\":[\"https://e.org\"]},\"matched-at\":\"http://t/\",\"extracted-results\":[\"PHP/8.1\"]}\n";
+        let f = &parse("nuclei-jsonl", jsonl, &ctx(None)).unwrap()[0];
+        assert_eq!(
+            (f.severity, f.title.as_str(), f.snippet.as_deref()),
+            (Severity::Low, "PHP version disclosed", Some("PHP/8.1"))
+        );
+
+        let ssl = r#"[{"id":"cert_chain_of_trust","severity":"CRITICAL","finding":"failed (self signed)."},
+            {"id":"TLS1_3","severity":"OK","finding":"offered"},
+            {"id":"BREACH","severity":"MEDIUM","finding":"potentially VULNERABLE","cve":"CVE-2013-3587","cwe":"CWE-310"}]"#;
+        let f = parse("testssl-json", ssl, &ctx(None)).unwrap();
+        assert_eq!(f.len(), 2);
+        assert_eq!(f[0].title, "Cert chain of trust: failed (self signed).");
+        assert_eq!(f[0].severity, Severity::High);
+        assert_eq!(
+            f[1].help_url.as_deref(),
+            Some("https://nvd.nist.gov/vuln/detail/CVE-2013-3587")
+        );
     }
 
     #[test]

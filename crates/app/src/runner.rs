@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::http::StatusCode;
-use common::{JobCreated, JobRequest, JobState, WorkspaceInfo};
+use common::{FingerprintRequest, JobCreated, JobRequest, JobState, Tag, WorkspaceInfo};
 use serde::de::DeserializeOwned;
 
 use crate::plan::ApiError;
@@ -90,6 +90,18 @@ impl RunnerClient {
                 .post(format!("{}/workspaces", self.base))
                 .header("content-type", "application/zip")
                 .body(zip),
+        )
+        .await
+    }
+
+    pub async fn fingerprint(&self, url: &str) -> Result<Vec<Tag>, ApiError> {
+        let req = FingerprintRequest {
+            url: url.to_string(),
+        };
+        self.send(
+            self.http
+                .post(format!("{}/fingerprint", self.base))
+                .json(&req),
         )
         .await
     }

@@ -4,6 +4,7 @@
 mod detect;
 mod execute;
 mod parsers;
+mod recon;
 mod unpack;
 
 use std::collections::HashMap;
@@ -19,12 +20,14 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use common::{CatalogAction, JobCreated, JobRequest, JobState, WorkspaceInfo};
+use common::{
+    CatalogAction, FingerprintRequest, JobCreated, JobRequest, JobState, Scope, Tag, WorkspaceInfo,
+};
 use rand::RngCore;
 use serde::Deserialize;
 use serde_json::json;
 
-use execute::{ExecConfig, Jobs};
+use execute::{ExecConfig, JobSpec, Jobs};
 
 pub fn random_id() -> String {
     let mut bytes = [0u8; 16];
@@ -45,6 +48,40 @@ struct AppState {
     catalog: Arc<HashMap<String, CatalogAction>>,
     jobs: Arc<Jobs>,
     limits: Arc<unpack::Limits>,
+    scope: Arc<Scope>,
+    rate: RateLimits,
+}
+
+#[derive(Clone, Copy)]
+struct RateLimits {
+    default_rps: u32,
+    max_rps: u32,
+}
+
+/// Parses an http(s) URL and checks it against the runner's own allowlist,
+/// resolving the hostname now (just before the job or request).
+async fn checked_url(scope: &Scope, raw: &str) -> Result<url::Url, Error> {
+    let url = url::Url::parse(raw).map_err(|e| bad_request(format!("Invalid URL: {e}")))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(bad_request("Only http and https URLs can be scanned"));
+    }
+    scope
+        .check_url(&url)
+        .await
+        .map_err(|e| Error(StatusCode::FORBIDDEN, e))?;
+    Ok(url)
+}
+
+async fn fingerprint(
+    State(state): State<AppState>,
+    Json(req): Json<FingerprintRequest>,
+) -> Result<Json<Vec<Tag>>, Error> {
+    let url = checked_url(&state.scope, &req.url).await?;
+    tracing::info!(url = %url, "fingerprint");
+    recon::fingerprint(&state.scope, &url)
+        .await
+        .map(Json)
+        .map_err(|e| Error(StatusCode::BAD_GATEWAY, e))
 }
 
 struct Error(StatusCode, String);
@@ -123,29 +160,63 @@ async fn create_job(
     State(state): State<AppState>,
     Json(req): Json<JobRequest>,
 ) -> Result<Json<JobCreated>, Error> {
-    if !is_id(&req.workspace_id) {
-        return Err(bad_request("Invalid workspace id"));
-    }
-    let ws = state.workspaces.join(&req.workspace_id);
-    if !ws.join("src").is_dir() {
-        return Err(Error(
-            StatusCode::NOT_FOUND,
-            "Workspace not found (it may have expired)".into(),
-        ));
-    }
     let action = state
         .catalog
         .get(&req.action_id)
         .ok_or_else(|| bad_request(format!("Unknown action {}", req.action_id)))?;
-    // URL targets need the scope allowlist, which arrives with URL scanning.
-    if action.input != "source" || action.mode != "passive" {
-        return Err(bad_request(format!(
-            "{} can't run on this runner yet",
-            action.title
-        )));
-    }
-    let job_id = state.jobs.start(action.clone(), ws);
-    tracing::info!(job = %job_id, action = %req.action_id, workspace = %req.workspace_id, "job queued");
+    let (ws, url) = match action.input.as_str() {
+        "source" => {
+            let id = req
+                .workspace_id
+                .as_deref()
+                .filter(|id| is_id(id))
+                .ok_or_else(|| bad_request("Invalid workspace id"))?;
+            let ws = state.workspaces.join(id);
+            if !ws.join("src").is_dir() {
+                return Err(Error(
+                    StatusCode::NOT_FOUND,
+                    "Workspace not found (it may have expired)".into(),
+                ));
+            }
+            (ws, None)
+        }
+        "url" => {
+            let url = checked_url(
+                &state.scope,
+                req.url
+                    .as_deref()
+                    .ok_or_else(|| bad_request("This action needs a URL"))?,
+            )
+            .await?;
+            if action.mode == "active" && req.confirm_host.as_deref() != url.host_str() {
+                return Err(bad_request(format!(
+                    "{} is an active test; confirm the hostname to run it",
+                    action.title
+                )));
+            }
+            let ws = state.workspaces.join(random_id());
+            tokio::fs::create_dir_all(&ws)
+                .await
+                .map_err(|e| Error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            (ws, Some(url))
+        }
+        other => return Err(bad_request(format!("Unsupported input {other}"))),
+    };
+    let rps = req
+        .rate_limit_rps
+        .unwrap_or(state.rate.default_rps)
+        .clamp(1, state.rate.max_rps);
+    let target = url.as_ref().map_or_else(
+        || req.workspace_id.clone().unwrap_or_default(),
+        |u| u.to_string(),
+    );
+    let job_id = state.jobs.start(JobSpec {
+        action: action.clone(),
+        ws,
+        url,
+        rate_limit_rps: rps,
+    });
+    tracing::info!(job = %job_id, action = %req.action_id, %target, rps, mode = %action.mode, "job queued");
     Ok(Json(JobCreated { job_id }))
 }
 
@@ -185,6 +256,7 @@ fn router(state: AppState, max_upload: usize) -> Router {
             post(create_workspace).layer(DefaultBodyLimit::max(max_upload)),
         )
         .route("/jobs", post(create_job))
+        .route("/fingerprint", post(fingerprint))
         .route("/jobs/{id}", get(job_state))
         .route("/jobs/{id}/stop", post(stop_job))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_token));
@@ -262,6 +334,7 @@ async fn main() {
                 "/opt/sectestgen-runner/tools/bin:/usr/local/bin:/usr/bin:/bin",
             ),
             cache_dir: std::env::var("CACHE_DIR").ok().map(PathBuf::from),
+            tools_dir: env_or("TOOLS_DIR", "/opt/sectestgen-runner/tools"),
         },
     );
     tokio::spawn(cleanup_loop(
@@ -270,12 +343,21 @@ async fn main() {
     ));
     tracing::info!("loaded {} catalog actions", catalog.len());
 
+    let scope = Scope::parse(&env_or("SCOPE_ALLOWLIST", "")).unwrap_or_else(|e| fail(e));
+    if scope.is_empty() {
+        tracing::warn!("SCOPE_ALLOWLIST is empty: URL tests are refused");
+    }
     let state = AppState {
         token: Arc::new(token),
         workspaces: Arc::new(workspaces),
         catalog: Arc::new(catalog),
         jobs: Arc::new(jobs),
         limits: Arc::new(limits),
+        scope: Arc::new(scope),
+        rate: RateLimits {
+            default_rps: env_num("DEFAULT_RATE_LIMIT_RPS", 10) as u32,
+            max_rps: env_num("MAX_RATE_LIMIT_RPS", 50) as u32,
+        },
     };
     let app = router(state, max_upload);
     match (std::env::var("TLS_CERT"), std::env::var("TLS_KEY")) {

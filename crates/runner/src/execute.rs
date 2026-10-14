@@ -23,6 +23,18 @@ pub struct ExecConfig {
     /// Shared download cache (vulnerability databases, rule bundles) so each
     /// job doesn't fetch them again. Per-job home directories otherwise.
     pub cache_dir: Option<PathBuf>,
+    /// Where the tools are installed, for `{{ tools_dir }}` (e.g. nuclei templates).
+    pub tools_dir: String,
+}
+
+/// One approved action and what it runs against.
+pub struct JobSpec {
+    pub action: CatalogAction,
+    /// Workspace directory; `src/` inside it holds the project for code actions.
+    pub ws: PathBuf,
+    /// Target for URL actions, already checked against the scope.
+    pub url: Option<url::Url>,
+    pub rate_limit_rps: u32,
 }
 
 #[derive(Default)]
@@ -48,7 +60,7 @@ impl Job {
         f(&mut self.inner.lock().unwrap());
     }
 
-    fn log(&self, line: String) {
+    pub(crate) fn log(&self, line: String) {
         let mut inner = self.inner.lock().unwrap();
         if inner.log.len() == LOG_LINES {
             inner.log.pop_front();
@@ -112,13 +124,13 @@ impl Jobs {
         self.jobs.lock().unwrap().get(id).cloned()
     }
 
-    /// Queues `action` against the workspace at `ws` and returns the job id.
-    pub fn start(&self, action: CatalogAction, ws: PathBuf) -> String {
+    /// Queues the job and returns its id.
+    pub fn start(&self, spec: JobSpec) -> String {
         let id = crate::random_id();
         let (stop, stop_rx) = watch::channel(false);
         let job = Arc::new(Job {
             id: id.clone(),
-            action_id: action.id.clone(),
+            action_id: spec.action.id.clone(),
             inner: Mutex::default(),
             stop,
         });
@@ -134,7 +146,7 @@ impl Jobs {
                     return;
                 }
             };
-            run(&job, &action, &ws, &config, stop_rx).await;
+            run(&job, &spec, &config, stop_rx).await;
             drop(permit);
         });
         id
@@ -173,33 +185,68 @@ fn find_cargo_lock(src: &Path) -> Option<PathBuf> {
     None
 }
 
-fn render_args(action: &CatalogAction, src: &Path, out: &Path) -> Result<Vec<String>, String> {
-    let src_s = src.to_string_lossy();
-    let out_s = out.to_string_lossy();
-    let mut cargo_lock = None;
-    action
-        .command
-        .iter()
-        .map(|arg| {
-            let mut arg = arg
-                .replace("{{ src }}", &src_s)
-                .replace("{{ out }}", &out_s);
-            if arg.contains("{{ cargo_lock }}") {
-                if cargo_lock.is_none() {
-                    cargo_lock =
-                        Some(find_cargo_lock(src).ok_or("No Cargo.lock found in the project")?);
-                }
-                arg = arg.replace(
-                    "{{ cargo_lock }}",
-                    &cargo_lock.as_ref().unwrap().to_string_lossy(),
-                );
+/// Values for the `{{ … }}` placeholders in a catalog action.
+struct Vars {
+    src: String,
+    out: String,
+    url: Option<url::Url>,
+    rps: u32,
+    tools_dir: String,
+    cargo_lock: Option<PathBuf>,
+}
+
+/// Escapes regex metacharacters, for ZAP's include-path patterns.
+fn regex_escape(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| {
+            if r"\.^$|?*+()[]{}".contains(c) {
+                vec!['\\', c]
+            } else {
+                vec![c]
             }
-            if arg.contains("{{") {
-                return Err(format!("Unsupported placeholder in {arg}"));
-            }
-            Ok(arg)
         })
         .collect()
+}
+
+impl Vars {
+    fn render(&mut self, template: &str, src_dir: &Path) -> Result<String, String> {
+        let mut text = template
+            .replace("{{ src }}", &self.src)
+            .replace("{{ out }}", &self.out);
+        text = text
+            .replace("{{ rps }}", &self.rps.to_string())
+            .replace("{{ delay_ms }}", &(1000 / self.rps.max(1)).to_string())
+            .replace("{{ tools_dir }}", &self.tools_dir);
+        if text.contains("{{ url") || text.contains("{{ origin_regex_q }}") {
+            let url = self.url.as_ref().ok_or("This action needs a target URL")?;
+            let origin = url.origin().ascii_serialization();
+            let quote = |s: &str| serde_json::to_string(s).expect("string");
+            text = text
+                .replace("{{ url_q }}", &quote(url.as_str()))
+                .replace(
+                    "{{ origin_regex_q }}",
+                    &quote(&format!("{}/.*", regex_escape(&origin))),
+                )
+                .replace("{{ url }}", url.as_str());
+        }
+        if text.contains("{{ cargo_lock }}") {
+            if self.cargo_lock.is_none() {
+                self.cargo_lock =
+                    Some(find_cargo_lock(src_dir).ok_or("No Cargo.lock found in the project")?);
+            }
+            text = text.replace(
+                "{{ cargo_lock }}",
+                &self.cargo_lock.as_ref().unwrap().to_string_lossy(),
+            );
+        }
+        if let Some(i) = text.find("{{") {
+            return Err(format!(
+                "Unsupported placeholder in {}",
+                &text[i..text.len().min(i + 30)]
+            ));
+        }
+        Ok(text)
+    }
 }
 
 /// Shortens absolute workspace paths in log lines.
@@ -237,19 +284,27 @@ fn kill_group(pid: Option<u32>) {
     }
 }
 
-async fn run(
+/// Runs a `builtin:<name>` action inside the runner instead of a process.
+async fn run_builtin(
     job: &Arc<Job>,
-    action: &CatalogAction,
-    ws: &Path,
-    config: &ExecConfig,
-    mut stop: watch::Receiver<bool>,
-) {
+    name: &str,
+    url: Option<&url::Url>,
+) -> Result<Vec<Finding>, String> {
+    let url = url.ok_or("This action needs a target URL")?;
+    match name {
+        "cors" => crate::recon::cors(url, |line| job.log(line)).await,
+        other => Err(format!("Unknown built-in check {other}")),
+    }
+}
+
+async fn run(job: &Arc<Job>, spec: &JobSpec, config: &ExecConfig, mut stop: watch::Receiver<bool>) {
+    let action = &spec.action;
     job.set(|i| {
         i.status = Some(JobStatus::Running);
         i.started = Some(Instant::now());
     });
-    let src = ws.join("src");
-    let out = ws.join("out").join(&job.id);
+    let src = spec.ws.join("src");
+    let out = spec.ws.join("out").join(&job.id);
     let home = out.join(".home");
     if let Err(e) = tokio::fs::create_dir_all(&home).await {
         return job.finish(
@@ -257,12 +312,68 @@ async fn run(
             Some(format!("Cannot create output dir: {e}")),
         );
     }
-    let args = match render_args(action, &src, &out) {
+    let src_s = src.to_string_lossy().to_string();
+    let ws_s = spec.ws.to_string_lossy().to_string();
+    let mut vars = Vars {
+        src: src_s.clone(),
+        out: out.to_string_lossy().to_string(),
+        url: spec.url.clone(),
+        rps: spec.rate_limit_rps,
+        tools_dir: config.tools_dir.clone(),
+        cargo_lock: None,
+    };
+    let timeout = Duration::from_secs(action.timeout_minutes * 60);
+
+    if let Some(name) = action
+        .command
+        .first()
+        .and_then(|c| c.strip_prefix("builtin:"))
+    {
+        job.log(format!(
+            "Built-in {name} check against {}",
+            spec.url.as_ref().map_or("?", |u| u.as_str())
+        ));
+        let result = tokio::select! {
+            r = run_builtin(job, name, spec.url.as_ref()) => r,
+            _ = tokio::time::sleep(timeout) => Err(format!("Timed out after {} minutes", action.timeout_minutes)),
+            _ = stopped(&mut stop) => return job.finish(JobStatus::Stopped, None),
+        };
+        return match result {
+            Ok(findings) => {
+                job.log(format!("{} findings", findings.len()));
+                job.set(|i| i.findings = findings);
+                job.finish(JobStatus::Done, None);
+            }
+            Err(e) => job.finish(JobStatus::Failed, Some(e)),
+        };
+    }
+
+    let args: Vec<String> = match action
+        .command
+        .iter()
+        .map(|a| vars.render(a, &src))
+        .collect()
+    {
         Ok(a) => a,
         Err(e) => return job.finish(JobStatus::Failed, Some(e)),
     };
-    let src_s = src.to_string_lossy().to_string();
-    let ws_s = ws.to_string_lossy().to_string();
+    for (name, template) in &action.files {
+        let written = match vars.render(template, &src) {
+            Ok(text) if !name.contains('/') && !name.starts_with('.') => {
+                tokio::fs::write(out.join(name), text)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+            Ok(_) => Err(format!("Invalid file name {name}")),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = written {
+            return job.finish(
+                JobStatus::Failed,
+                Some(format!("Cannot prepare {name}: {e}")),
+            );
+        }
+    }
     job.log(format!("$ {}", tidy(&args.join(" "), &src_s, &ws_s)));
 
     let mut command = Command::new(&args[0]);
@@ -313,7 +424,6 @@ async fn run(
         false,
     ));
 
-    let timeout = Duration::from_secs(action.timeout_minutes * 60);
     let exit = tokio::select! {
         status = child.wait() => status.ok(),
         _ = tokio::time::sleep(timeout) => {
@@ -359,19 +469,15 @@ async fn run(
         }
         None => Ok(stdout),
     };
-    let default_location = find_cargo_lock(&src)
-        .filter(|_| {
-            action
-                .command
-                .iter()
-                .any(|a| a.contains("{{ cargo_lock }}"))
-        })
-        .map(|p| {
+    let default_location = match &spec.url {
+        Some(url) => Some(url.to_string()),
+        None => vars.cargo_lock.as_ref().map(|p| {
             p.strip_prefix(&src)
-                .unwrap_or(&p)
+                .unwrap_or(p)
                 .to_string_lossy()
                 .to_string()
-        });
+        }),
+    };
     let ctx = parsers::Context {
         tool: &action.tool,
         src: &src_s,
@@ -411,6 +517,16 @@ mod tests {
             timeout_minutes,
             severity: None,
             ok_exit_codes: vec![0, 1],
+            files: Default::default(),
+        }
+    }
+
+    fn spec(action: CatalogAction, ws: &Path) -> JobSpec {
+        JobSpec {
+            action,
+            ws: ws.to_path_buf(),
+            url: None,
+            rate_limit_rps: 10,
         }
     }
 
@@ -428,14 +544,12 @@ mod tests {
     fn setup(cache_dir: Option<PathBuf>) -> (tempfile::TempDir, Jobs) {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("src/sub")).unwrap();
-        let jobs = Jobs::new(
-            1,
-            ExecConfig {
-                tools_path: "/usr/bin:/bin".into(),
-                cache_dir,
-            },
-        );
-        (tmp, jobs)
+        let config = ExecConfig {
+            tools_path: "/usr/bin:/bin".into(),
+            cache_dir,
+            tools_dir: "/opt/tools".into(),
+        };
+        (tmp, Jobs::new(1, config))
     }
 
     #[tokio::test]
@@ -449,7 +563,7 @@ mod tests {
             Some("{{ out }}/r.sarif"),
             1,
         );
-        let id = jobs.start(a, tmp.path().to_path_buf());
+        let id = jobs.start(spec(a, tmp.path()));
         let state = wait(&jobs, &id).await;
         assert_eq!(state.status, JobStatus::Done, "{state:?}");
         assert_eq!(state.exit_code, Some(1));
@@ -460,15 +574,14 @@ mod tests {
     #[tokio::test]
     async fn unexpected_exit_code_fails_even_with_results() {
         let (tmp, jobs) = setup(None);
-        let sarif = r#"{"runs":[]}"#;
-        let script = format!("echo '{sarif}' > \"$1/r.sarif\"; exit 127");
+        let script = "echo '{\"runs\":[]}' > \"$1/r.sarif\"; exit 127";
         let a = action(
-            &["sh", "-c", &script, "sh", "{{ out }}"],
+            &["sh", "-c", script, "sh", "{{ out }}"],
             Some("sarif"),
             Some("{{ out }}/r.sarif"),
             1,
         );
-        let state = wait(&jobs, &jobs.start(a, tmp.path().to_path_buf())).await;
+        let state = wait(&jobs, &jobs.start(spec(a, tmp.path()))).await;
         assert_eq!(state.status, JobStatus::Failed);
         assert_eq!(
             state.error.as_deref(),
@@ -480,10 +593,10 @@ mod tests {
     async fn only_path_home_and_cache_reach_tools() {
         let (tmp, jobs) = setup(Some(PathBuf::from("/var/cache/x")));
         std::env::set_var("RUNNER_TOKEN_TEST_SECRET", "s3cret");
-        let id = jobs.start(
+        let id = jobs.start(spec(
             action(&["sh", "-c", "env"], None, None, 1),
-            tmp.path().to_path_buf(),
-        );
+            tmp.path(),
+        ));
         let state = wait(&jobs, &id).await;
         assert!(!state.log.iter().any(|l| l.contains("s3cret")));
         assert!(
@@ -497,12 +610,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn renders_url_rate_limit_and_plan_files() {
+        let (tmp, jobs) = setup(None);
+        let mut a = action(
+            &[
+                "sh",
+                "-c",
+                "cat plan.yaml; echo \"$1 $2\"",
+                "sh",
+                "{{ url }}",
+                "{{ rps }}",
+            ],
+            None,
+            None,
+            1,
+        );
+        a.files.insert(
+            "plan.yaml".into(),
+            "urls: [{{ url_q }}]\ninclude: {{ origin_regex_q }}\ndelay: {{ delay_ms }}\n".into(),
+        );
+        let mut s = spec(a, tmp.path());
+        s.url = Some(url::Url::parse("https://test.example.dk/a?b=\"c\"").unwrap());
+        s.rate_limit_rps = 4;
+        let state = wait(&jobs, &jobs.start(s)).await;
+        assert_eq!(state.status, JobStatus::Done, "{state:?}");
+        assert!(
+            state
+                .log
+                .contains(&r#"urls: ["https://test.example.dk/a?b=%22c%22"]"#.to_string()),
+            "{:?}",
+            state.log
+        );
+        assert!(
+            state
+                .log
+                .contains(&r#"include: "https://test\\.example\\.dk/.*""#.to_string()),
+            "{:?}",
+            state.log
+        );
+        assert!(state.log.contains(&"delay: 250".to_string()));
+        assert!(state
+            .log
+            .contains(&"https://test.example.dk/a?b=%22c%22 4".to_string()));
+    }
+
+    #[tokio::test]
+    async fn url_placeholder_without_url_fails() {
+        let (tmp, jobs) = setup(None);
+        let state = wait(
+            &jobs,
+            &jobs.start(spec(
+                action(&["echo", "{{ url }}"], None, None, 1),
+                tmp.path(),
+            )),
+        )
+        .await;
+        assert_eq!(
+            state.error.as_deref(),
+            Some("This action needs a target URL")
+        );
+    }
+
+    #[tokio::test]
     async fn stop_kills_running_job() {
         let (tmp, jobs) = setup(None);
-        let id = jobs.start(
-            action(&["sleep", "30"], None, None, 1),
-            tmp.path().to_path_buf(),
-        );
+        let id = jobs.start(spec(action(&["sleep", "30"], None, None, 1), tmp.path()));
         tokio::time::sleep(Duration::from_millis(100)).await;
         jobs.get(&id).unwrap().request_stop();
         assert_eq!(wait(&jobs, &id).await.status, JobStatus::Stopped);
@@ -517,7 +689,7 @@ mod tests {
             None,
             1,
         );
-        let state = wait(&jobs, &jobs.start(a, tmp.path().to_path_buf())).await;
+        let state = wait(&jobs, &jobs.start(spec(a, tmp.path()))).await;
         assert_eq!(state.status, JobStatus::Failed);
         assert_eq!(
             state.error.as_deref(),

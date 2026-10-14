@@ -260,6 +260,8 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_yaml",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -1123,6 +1125,7 @@ dependencies = [
  "hex",
  "libc",
  "rand 0.8.8",
+ "reqwest",
  "rustls",
  "serde",
  "serde_json",
@@ -1130,6 +1133,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "zip",
 ]
 

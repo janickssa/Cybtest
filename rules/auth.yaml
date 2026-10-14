@@ -9,7 +9,6 @@
     Verify the server rejects tokens with alg "none", tokens signed with a
     different key, expired tokens, and tokens with tampered claims.
   expected_secure_behavior: All manipulated tokens return 401.
-  actions: [{ id: builtin-jwt-checks, requires: [url] }]
 
 - id: login-brute-force
   title: Brute-force and credential stuffing protection

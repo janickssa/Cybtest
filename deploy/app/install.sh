@@ -25,6 +25,9 @@ if [[ ! -f $ENV_FILE ]]; then
   read -rp "Will you reach it over HTTPS (reverse proxy such as Caddy)? [y/N] " https
   # Browsers drop Secure cookies on plain HTTP, so login only works with this matching.
   cookie_secure=false; [[ $https =~ ^[Yy] ]] && cookie_secure=true
+  echo "Which targets may be scanned? Hosts and networks, comma-separated,"
+  echo "e.g. *.schwabejss.dk,10.0.20.0/24. Use the same list on the runner."
+  read -rp "Allowlist: " allowlist
   umask 077
   cat > "$ENV_FILE" <<CONF
 BIND_ADDR=0.0.0.0:8080
@@ -35,6 +38,7 @@ RULES_DIR=$OPT/rules
 CATALOG_DIR=$OPT/catalog
 FRONTEND_DIR=$OPT/dist
 DATA_DIR=/var/lib/sectestgen
+SCOPE_ALLOWLIST=$allowlist
 CONF
   chmod 600 "$ENV_FILE"
   echo "Wrote $ENV_FILE"

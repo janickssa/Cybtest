@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Installs the scanning tools at pinned versions into $TOOLS_DIR (default
 # /opt/sectestgen-runner/tools). Every download is checked against its SHA-256.
+# ZAP needs Java 17+ and testssl comes from the distribution's package
+# (install.sh installs both with apt).
 set -euo pipefail
 
 TOOLS_DIR=${TOOLS_DIR:-/opt/sectestgen-runner/tools}
@@ -11,12 +13,16 @@ OSV_SCANNER=2.7.0
 TRIVY=0.75.0
 CARGO_AUDIT=0.22.2
 SEMGREP=1.180.0
+NUCLEI=3.11.1
+ZAP=2.16.1
 
 declare -A SHA256=(
   [gitleaks]=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
   [osv-scanner]=160c6253e2922e9e0a6a9771c5c4c40a4b3c6090b34a3cdd5e80c96cc2e4218b
   [trivy]=c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
   [cargo-audit]=7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428
+  [nuclei]=ea63d4ae232808cd7c6bc00d0142428e231fab59dae01042246097d195835ab6
+  [zap]=5b2eb8319b085121a6e8ad50d69d67dbef8c867166f71a937bfc888d247a2ac1
 )
 
 tmp=$(mktemp -d)
@@ -45,11 +51,28 @@ fetch cargo-audit "https://github.com/rustsec/rustsec/releases/download/cargo-au
 tar -xzf "$tmp/cargo-audit.download" -C "$tmp"
 install -m 755 "$(find "$tmp" -type f -name cargo-audit | head -n1)" "$TOOLS_DIR/bin/cargo-audit"
 
+fetch nuclei "https://github.com/projectdiscovery/nuclei/releases/download/v$NUCLEI/nuclei_${NUCLEI}_linux_amd64.zip"
+python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extract("nuclei", sys.argv[2])' "$tmp/nuclei.download" "$tmp"
+install -m 755 "$tmp/nuclei" "$TOOLS_DIR/bin/nuclei"
+echo "Downloading nuclei templates"
+HOME="$tmp" "$TOOLS_DIR/bin/nuclei" -silent -update-templates -ud "$TOOLS_DIR/nuclei-templates" >/dev/null || true
+if [[ -z $(find "$TOOLS_DIR/nuclei-templates" -name '*.yaml' -print -quit 2>/dev/null) ]]; then
+  echo "nuclei templates could not be downloaded (needs access to api.github.com and github.com)." >&2
+  exit 1
+fi
+
+fetch zap "https://github.com/zaproxy/zaproxy/releases/download/v$ZAP/ZAP_${ZAP}_Linux.tar.gz"
+rm -rf "$TOOLS_DIR/ZAP_$ZAP"
+tar -xzf "$tmp/zap.download" -C "$TOOLS_DIR"
+ln -sf "$TOOLS_DIR/ZAP_$ZAP/zap.sh" "$TOOLS_DIR/bin/zap.sh"
+
+if command -v testssl >/dev/null; then ln -sf "$(command -v testssl)" "$TOOLS_DIR/bin/testssl"; fi
+
 echo "Installing semgrep $SEMGREP"
 python3 -m venv "$TOOLS_DIR/semgrep"
 "$TOOLS_DIR/semgrep/bin/pip" install --quiet --disable-pip-version-check "semgrep==$SEMGREP"
 ln -sf "$TOOLS_DIR/semgrep/bin/semgrep" "$TOOLS_DIR/bin/semgrep"
 
-for tool in gitleaks osv-scanner trivy cargo-audit semgrep; do
+for tool in gitleaks osv-scanner trivy cargo-audit semgrep nuclei; do
   printf '%-12s ' "$tool"; "$TOOLS_DIR/bin/$tool" --version 2>&1 | head -n1
 done

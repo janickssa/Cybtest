@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, type DetectedTag, type PlanItem, type RunState, type Upload } from "./api";
+import { api, ApiError, type DetectedTag, type PlanItem, type RunState, type ScopeStatus, type Upload } from "./api";
 import Login from "./Login";
 import StepResults from "./StepResults";
 import StepReview from "./StepReview";
@@ -39,7 +39,8 @@ function Stepper({ step }: { step: number }) {
 export default function App() {
   const [auth, setAuth] = useState<"checking" | "out" | "in">("checking");
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
-  const [target, setTarget] = useState<Target>({ name: "", url: "", description: "" });
+  const [target, setTarget] = useState<Target>({ name: "", url: "", description: "", rps: 10 });
+  const [scope, setScope] = useState<ScopeStatus | null>(null);
   const [tags, setTags] = useState<DetectedTag[] | null>(null);
   const [upload, setUpload] = useState<(Upload & { name: string }) | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
@@ -108,15 +109,26 @@ export default function App() {
   }, [tags, selected, target, onError]);
 
   const startRun = useCallback(async () => {
-    if (!tags || !upload || selected.size === 0) return;
+    const urlAllowed = scope?.allowed === true && target.url.trim() !== "";
+    if (!tags || (!upload && !urlAllowed) || selected.size === 0) return;
+    const hasActive = plan.some((i) => i.active && selected.has(i.rule_id));
+    let host: string | null = null;
+    try {
+      host = target.url ? new URL(target.url).hostname : null;
+    } catch {
+      host = null;
+    }
     setBusy(true);
     setError(null);
     try {
       const { run_id } = await api.startRun({
-        workspace_id: upload.workspace_id,
+        workspace_id: upload?.workspace_id ?? null,
         url: target.url,
         tags: tags.map((t) => t.id),
         selected: [...selected],
+        rate_limit_rps: target.rps,
+        // Active tests were confirmed by typing the hostname when they were selected.
+        confirm_host: hasActive ? host : null,
       });
       setRun(null);
       setRunId(run_id);
@@ -127,14 +139,14 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  }, [tags, upload, selected, target.url, onError]);
+  }, [tags, upload, selected, target.url, target.rps, scope, plan, onError]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         if (step === 1) buildPlan();
-        else if (step === 2) (upload ? startRun : exportPlan)();
+        else if (step === 2) (upload || scope?.allowed ? startRun : exportPlan)();
         else if (step === 3 && run?.finished) setStep(4);
       } else if (e.key === "/" && (step === 2 || step === 4) && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
         e.preventDefault();
@@ -143,7 +155,7 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [step, buildPlan, exportPlan, startRun, upload, run?.finished]);
+  }, [step, buildPlan, exportPlan, startRun, upload, scope, run?.finished]);
 
   if (auth === "checking") return null;
   if (auth === "out") return <Login onLogin={() => setAuth("in")} />;
@@ -175,6 +187,8 @@ export default function App() {
           setTags={setTags}
           upload={upload}
           setUpload={setUpload}
+          scope={scope}
+          setScope={setScope}
           onContinue={buildPlan}
           busy={busy}
           error={error}
@@ -190,7 +204,9 @@ export default function App() {
             setSelected={setSelected}
             url={target.url}
             hasSource={upload !== null}
-            canRun={upload !== null}
+            rps={target.rps}
+            urlAllowed={scope?.allowed === true}
+            canRun={upload !== null || scope?.allowed === true}
             onRun={startRun}
             onBack={() => {
               setError(null);
