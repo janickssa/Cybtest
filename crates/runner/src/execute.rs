@@ -120,6 +120,14 @@ impl Jobs {
         }
     }
 
+    /// Forgets jobs that finished more than `max_age` ago (the app has stored their results by then).
+    pub fn prune(&self, max_age: Duration) {
+        self.jobs.lock().unwrap().retain(|_, job| {
+            let finished = job.inner.lock().unwrap().finished;
+            finished.is_none_or(|f| f.elapsed() < max_age)
+        });
+    }
+
     pub fn get(&self, id: &str) -> Option<Arc<Job>> {
         self.jobs.lock().unwrap().get(id).cloned()
     }

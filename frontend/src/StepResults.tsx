@@ -1,7 +1,7 @@
 import { forwardRef, useMemo, useState } from "react";
 import { api, type Finding, type FindingView, type RunState, type Severity, type Triage } from "./api";
 import { download, formatDate } from "./format";
-import { Badge, Button, Card, SeverityDot, inputClass } from "./ui";
+import { Badge, Button, Card, SeverityDot, inputClass, safeUrl } from "./ui";
 
 interface Props {
   run: RunState;
@@ -94,8 +94,8 @@ function FindingRow({ f, onTriage }: { f: FindingView; onTriage: (status: Triage
           )}
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
             <Badge>{f.rule_id}</Badge>
-            {f.help_url && (
-              <a className="text-indigo-600 underline dark:text-indigo-400" href={f.help_url} target="_blank" rel="noreferrer noopener">
+            {safeUrl(f.help_url) && (
+              <a className="text-indigo-600 underline dark:text-indigo-400" href={safeUrl(f.help_url)!} target="_blank" rel="noreferrer noopener">
                 More information ↗
               </a>
             )}

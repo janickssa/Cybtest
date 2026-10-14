@@ -69,3 +69,8 @@ export function ErrorNote({ message }: { message: string | null }) {
     </p>
   );
 }
+
+/** Returns the URL only if it is http(s), so tool output can't inject javascript: links. */
+export function safeUrl(url: string | null | undefined): string | null {
+  return url && /^https?:\/\//i.test(url) ? url : null;
+}

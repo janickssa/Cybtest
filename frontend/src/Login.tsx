@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import { Button, Card, ErrorNote, inputClass } from "./ui";
 
 export default function Login({ onLogin }: { onLogin: () => void }) {
@@ -14,8 +14,12 @@ export default function Login({ onLogin }: { onLogin: () => void }) {
     try {
       await api.login(password);
       onLogin();
-    } catch {
-      setError("Wrong password.");
+    } catch (e) {
+      setError(
+        e instanceof ApiError && e.status === 429
+          ? "Too many failed logins. Wait 15 minutes and try again."
+          : "Wrong password.",
+      );
     } finally {
       setBusy(false);
     }

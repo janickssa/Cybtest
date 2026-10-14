@@ -268,9 +268,10 @@ fn router(state: AppState, max_upload: usize) -> Router {
 }
 
 /// Deletes workspaces older than `days`, every hour.
-async fn cleanup_loop(dir: PathBuf, days: u64) {
+async fn cleanup_loop(dir: PathBuf, days: u64, jobs: Arc<Jobs>) {
     let max_age = Duration::from_secs(days * 24 * 60 * 60);
     loop {
+        jobs.prune(Duration::from_secs(24 * 60 * 60));
         if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let old = entry
@@ -338,9 +339,11 @@ async fn main() {
             tools_dir: env_or("TOOLS_DIR", "/opt/sectestgen-runner/tools"),
         },
     );
+    let jobs = Arc::new(jobs);
     tokio::spawn(cleanup_loop(
         workspaces.clone(),
         env_num("WORKSPACE_RETENTION_DAYS", 7),
+        jobs.clone(),
     ));
     tracing::info!("loaded {} catalog actions", catalog.len());
 
@@ -352,7 +355,7 @@ async fn main() {
         token: Arc::new(token),
         workspaces: Arc::new(workspaces),
         catalog: Arc::new(catalog),
-        jobs: Arc::new(jobs),
+        jobs,
         limits: Arc::new(limits),
         scope: Arc::new(scope),
         rate: RateLimits {

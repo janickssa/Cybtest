@@ -12,10 +12,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::{DefaultBodyLimit, FromRef};
+use axum::http::{header, HeaderValue};
 use axum::routing::{get, post};
 use axum::{middleware, Json, Router};
 use serde_json::{json, Value};
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
 
 use auth::Auth;
 use rules::Knowledge;
@@ -64,13 +66,39 @@ pub fn router(state: AppState, frontend_dir: Option<PathBuf>, max_upload: usize)
         .route("/api/login", post(auth::login))
         .route("/api/logout", post(auth::logout))
         .merge(protected)
+        .layer(middleware::from_fn(auth::same_origin))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        ))
         .with_state(state);
 
-    match frontend_dir {
+    let app = match frontend_dir {
         Some(dir) => api
             .fallback_service(ServeDir::new(&dir).fallback(ServeFile::new(dir.join("index.html")))),
         None => api,
-    }
+    };
+    security_headers(app)
+}
+
+/// Headers for every response, pages and API alike.
+fn security_headers(app: Router) -> Router {
+    let headers = [
+        (
+            header::CONTENT_SECURITY_POLICY,
+            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
+             connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        ),
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        (header::X_FRAME_OPTIONS, "DENY"),
+        (header::REFERRER_POLICY, "no-referrer"),
+    ];
+    headers.into_iter().fold(app, |app, (name, value)| {
+        app.layer(SetResponseHeaderLayer::if_not_present(
+            name,
+            HeaderValue::from_static(value),
+        ))
+    })
 }
 
 async fn health() -> Json<Value> {
@@ -224,6 +252,46 @@ mod tests {
     async fn wrong_password_is_rejected() {
         let res = app().await.oneshot(login_req("nope")).await.unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn login_is_throttled_after_repeated_failures() {
+        let app = app().await;
+        for _ in 0..5 {
+            let res = app.clone().oneshot(login_req("nope")).await.unwrap();
+            assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        }
+        // Even the right password is refused while throttled.
+        let res = app.oneshot(login_req("secret")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(res.headers().contains_key(header::RETRY_AFTER));
+    }
+
+    #[tokio::test]
+    async fn cross_site_posts_are_refused_and_headers_set() {
+        let mut req = login_req("secret");
+        req.headers_mut()
+            .insert(header::ORIGIN, "https://evil.example".parse().unwrap());
+        req.headers_mut()
+            .insert(header::HOST, "sectestgen.lan:8080".parse().unwrap());
+        let res = app().await.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        let mut req = login_req("secret");
+        req.headers_mut().insert(
+            header::ORIGIN,
+            "http://sectestgen.lan:8080".parse().unwrap(),
+        );
+        req.headers_mut()
+            .insert(header::HOST, "sectestgen.lan:8080".parse().unwrap());
+        let res = app().await.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+        assert_eq!(res.headers()[header::X_FRAME_OPTIONS], "DENY");
+        assert!(res.headers()[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap()
+            .contains("frame-ancestors 'none'"));
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store");
     }
 
     #[tokio::test]
