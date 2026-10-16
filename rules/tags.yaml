@@ -1,0 +1,63 @@
+# Tag vocabulary. Rules may only use tags defined here.
+# keywords: lowercase words in a description that suggest the tag.
+# implies: tags that follow from this one.
+
+- { id: "input:url", label: Target URL, category: Input }
+- { id: "input:source", label: Source code available, category: Input, keywords: [source code, repository, repo, codebase] }
+- { id: "proto:https", label: HTTPS, category: Input, keywords: [https] }
+- { id: "proto:http", label: Plain HTTP, category: Input }
+
+- { id: "lang:rust", label: Rust, category: Language, keywords: [rust, cargo] }
+- { id: "lang:javascript", label: JavaScript, category: Language, keywords: [javascript, js] }
+- { id: "lang:typescript", label: TypeScript, category: Language, keywords: [typescript, ts], implies: ["lang:javascript"] }
+- { id: "lang:python", label: Python, category: Language, keywords: [python] }
+- { id: "lang:php", label: PHP, category: Language, keywords: [php] }
+- { id: "lang:java", label: Java / Kotlin, category: Language, keywords: [java, kotlin, jvm] }
+- { id: "lang:go", label: Go, category: Language, keywords: [golang, go] }
+- { id: "lang:csharp", label: C# / .NET, category: Language, keywords: [c#, .net, dotnet, asp.net] }
+
+- { id: "fw:actix-web", label: Actix-web, category: Framework, keywords: [actix, actix-web], implies: ["lang:rust"] }
+- { id: "fw:axum", label: Axum, category: Framework, keywords: [axum], implies: ["lang:rust"] }
+- { id: "fw:react", label: React, category: Framework, keywords: [react], implies: ["lang:javascript"] }
+- { id: "fw:nextjs", label: Next.js, category: Framework, keywords: [next.js, nextjs], implies: ["fw:react", "runtime:node"] }
+- { id: "fw:express", label: Express, category: Framework, keywords: [express, express.js], implies: ["runtime:node"] }
+- { id: "runtime:node", label: Node.js, category: Framework, keywords: [node, node.js, nodejs], implies: ["lang:javascript"] }
+- { id: "fw:django", label: Django, category: Framework, keywords: [django], implies: ["lang:python", "db:orm"] }
+- { id: "fw:flask", label: Flask, category: Framework, keywords: [flask], implies: ["lang:python"] }
+- { id: "fw:fastapi", label: FastAPI, category: Framework, keywords: [fastapi], implies: ["lang:python", "api:rest"] }
+- { id: "fw:laravel", label: Laravel, category: Framework, keywords: [laravel], implies: ["lang:php", "db:orm"] }
+- { id: "fw:wordpress", label: WordPress, category: Framework, keywords: [wordpress, wp], implies: ["lang:php"] }
+- { id: "fw:spring", label: Spring, category: Framework, keywords: [spring, spring boot], implies: ["lang:java"] }
+
+- { id: "db:sql", label: SQL database, category: Data, keywords: [sql, database] }
+- { id: "db:postgres", label: PostgreSQL, category: Data, keywords: [postgres, postgresql], implies: ["db:sql"] }
+- { id: "db:mysql", label: MySQL / MariaDB, category: Data, keywords: [mysql, mariadb], implies: ["db:sql"] }
+- { id: "db:sqlite", label: SQLite, category: Data, keywords: [sqlite], implies: ["db:sql"] }
+- { id: "db:mongodb", label: MongoDB, category: Data, keywords: [mongo, mongodb] }
+- { id: "lib:sqlx", label: sqlx, category: Data, keywords: [sqlx], implies: ["lang:rust", "db:sql"] }
+- { id: "db:orm", label: ORM, category: Data, keywords: [orm, diesel, prisma, sequelize, hibernate, sqlalchemy, entity framework] }
+
+- { id: "auth:login", label: Login / passwords, category: Auth, keywords: [login, log in, sign in, signin, password, signup, sign up] }
+- { id: "auth:session", label: Session cookies, category: Auth, keywords: [session, sessions, cookie, cookies] }
+- { id: "auth:jwt", label: JWT, category: Auth, keywords: [jwt, jsonwebtoken, json web token, bearer token] }
+- { id: "auth:oauth", label: OAuth / OIDC / SSO, category: Auth, keywords: [oauth, oauth2, openid, oidc, sso, keycloak, entra, azure ad] }
+
+- { id: "api:rest", label: REST API, category: Features, keywords: [api, rest, rest api, json api] }
+- { id: "api:graphql", label: GraphQL, category: Features, keywords: [graphql] }
+- { id: "feature:file-upload", label: File uploads, category: Features, keywords: [upload, uploads, file upload, attachment, attachments] }
+- { id: "feature:url-fetch", label: Fetches user-given URLs, category: Features, keywords: [webhook, webhooks, url preview, link preview, import from url, fetch url] }
+- { id: "feature:xml", label: XML / SOAP input, category: Features, keywords: [xml, soap, saml] }
+- { id: "feature:websocket", label: WebSockets, category: Features, keywords: [websocket, websockets, socket.io] }
+- { id: "feature:payments", label: Payments, category: Features, keywords: [payment, payments, stripe, checkout, webshop, shop, mobilepay] }
+- { id: "feature:admin", label: Admin panel, category: Features, keywords: [admin, admin panel, backoffice, dashboard] }
+
+- { id: "server:nginx", label: nginx, category: Infrastructure, keywords: [nginx] }
+- { id: "server:apache", label: Apache httpd, category: Infrastructure, keywords: [apache, httpd] }
+- { id: "infra:docker", label: Docker, category: Infrastructure, keywords: [docker, dockerfile, docker-compose, container, containers] }
+- { id: "infra:kubernetes", label: Kubernetes, category: Infrastructure, keywords: [kubernetes, k8s, helm] }
+- { id: "infra:terraform", label: Terraform, category: Infrastructure, keywords: [terraform, opentofu] }
+- { id: "ci:github-actions", label: GitHub Actions, category: Infrastructure, keywords: [github actions] }
+- { id: "ci:gitlab", label: GitLab CI, category: Infrastructure, keywords: [gitlab ci, gitlab-ci] }
+
+- { id: "mobile:android", label: Android app, category: Mobile, keywords: [android, apk] }
+- { id: "mobile:ios", label: iOS app, category: Mobile, keywords: [ios, iphone, ipad, xcode] }

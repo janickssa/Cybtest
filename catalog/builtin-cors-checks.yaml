@@ -1,0 +1,9 @@
+id: builtin-cors-checks
+title: CORS policy checks
+tool: built-in
+input: url
+mode: passive
+est_minutes: 1
+# Two requests with untrusted Origin headers; runs inside the runner.
+command: ["builtin:cors", "{{ url }}"]
+timeout_minutes: 2

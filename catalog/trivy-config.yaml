@@ -1,0 +1,10 @@
+id: trivy-config
+title: Dockerfile / IaC misconfiguration
+tool: trivy
+input: source
+mode: passive
+est_minutes: 2
+command: ["trivy", "config", "--format", "sarif", "--output", "{{ out }}/trivy.sarif", "{{ src }}"]
+parser: sarif
+output: "{{ out }}/trivy.sarif"
+timeout_minutes: 10

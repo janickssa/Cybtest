@@ -1,0 +1,11 @@
+id: testssl
+title: TLS configuration
+tool: testssl.sh
+input: url
+mode: passive
+est_minutes: 3
+command: ["testssl", "--quiet", "--color", "0", "--warnings", "off", "--jsonfile", "{{ out }}/testssl.json", "{{ url }}"]
+parser: testssl-json
+output: "{{ out }}/testssl.json"
+ok_exit_codes: [0]
+timeout_minutes: 15

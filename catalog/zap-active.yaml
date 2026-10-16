@@ -1,0 +1,33 @@
+id: zap-active
+title: Full active web scan
+tool: zap
+input: url
+mode: active
+est_minutes: 40
+# Spider, then send attack payloads with one thread and a delay between requests.
+command: ["zap.sh", "-cmd", "-silent", "-autorun", "{{ out }}/plan.yaml"]
+files:
+  plan.yaml: |
+    env:
+      contexts:
+        - name: target
+          urls: [{{ url_q }}]
+          includePaths: [{{ origin_regex_q }}]
+      parameters:
+        failOnError: true
+        progressToStdout: true
+    jobs:
+      - type: spider
+        parameters: { maxDuration: 3, threadCount: 2 }
+      - type: passiveScan-wait
+        parameters: { maxDuration: 5 }
+      - type: activeScan
+        parameters: { maxScanDurationInMins: 40, threadPerHost: 1, delayInMs: {{ delay_ms }} }
+      - type: passiveScan-wait
+        parameters: { maxDuration: 5 }
+      - type: report
+        parameters: { template: traditional-json, reportDir: "{{ out }}", reportFile: zap.json }
+parser: zap-json
+output: "{{ out }}/zap.json"
+ok_exit_codes: [0, 2]
+timeout_minutes: 60

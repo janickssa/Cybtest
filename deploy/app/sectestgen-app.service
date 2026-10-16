@@ -1,0 +1,32 @@
+[Unit]
+Description=SecTestGen app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=sectestgen
+Group=sectestgen
+EnvironmentFile=/etc/sectestgen/sectestgen.env
+WorkingDirectory=/opt/sectestgen
+ExecStart=/usr/local/bin/sectestgen-app
+Restart=on-failure
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+StateDirectory=sectestgen
+ReadWritePaths=/var/lib/sectestgen
+
+[Install]
+WantedBy=multi-user.target

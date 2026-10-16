@@ -1,0 +1,31 @@
+# Containers, infrastructure as code and CI/CD.
+
+- id: dockerfile-misconfig
+  title: Dockerfile and image misconfiguration
+  when: { any: ["infra:docker"] }
+  severity: medium
+  references: [CIS-Docker]
+  description: Running as root, unpinned or outdated base images, secrets in build args or layers, and unnecessary exposed ports.
+  expected_secure_behavior: Non-root user, pinned slim base image, no secrets in the image.
+  actions: [{ id: trivy-config, requires: [source] }]
+
+- id: iac-misconfig
+  title: Kubernetes and Terraform misconfiguration
+  when: { any: ["infra:kubernetes", "infra:terraform"] }
+  severity: medium
+  references: [CIS-Kubernetes]
+  description: Privileged pods, missing resource limits, public buckets, open security groups and unencrypted storage.
+  expected_secure_behavior: Trivy reports no high-severity misconfigurations.
+  actions: [{ id: trivy-config, requires: [source] }]
+
+- id: ci-pipeline
+  title: CI/CD pipeline security
+  when: { any: ["ci:github-actions", "ci:gitlab"] }
+  severity: medium
+  references: [OWASP-CICD-SEC]
+  description: >
+    Check for pull_request_target workflows that run untrusted code with
+    secrets, actions not pinned to a commit SHA, overly broad token
+    permissions, and secrets printed to logs.
+  expected_secure_behavior: Third-party actions pinned; least-privilege tokens; no secrets reachable from fork PRs.
+  actions: [{ id: gitleaks-scan, requires: [source] }]

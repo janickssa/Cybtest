@@ -1,0 +1,11 @@
+id: gitleaks-scan
+title: Secrets in code
+tool: gitleaks
+input: source
+mode: passive
+est_minutes: 1
+command: ["gitleaks", "dir", "{{ src }}", "--redact", "--no-banner", "--report-format", "sarif", "--report-path", "{{ out }}/gitleaks.sarif"]
+parser: sarif
+output: "{{ out }}/gitleaks.sarif"
+severity: high
+timeout_minutes: 10

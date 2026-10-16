@@ -379,9 +379,9 @@ sectestgen/
 │           ├── unpack.rs      # safe zip extraction
 │           ├── detect.rs      # stack detection from files
 │           ├── recon.rs       # passive URL fingerprinting
-│           ├── execute.rs     # systemd-run with limits
+│           ├── execute.rs     # tool processes with timeouts, clean environment
 │           ├── scope.rs       # second allowlist check
-│           └── parsers/       # sarif, zap, nuclei, gitleaks, ...
+│           └── parsers.rs     # SARIF, cargo-audit JSON → findings
 ├── frontend/                  # React UI
 ├── rules/                     # YAML rule base
 ├── catalog/                   # YAML tool actions
@@ -430,7 +430,15 @@ scp -r catalog deploy/runner root@<runner-ip>:/opt/sectestgen-runner/
 ssh root@<runner-ip> 'bash /opt/sectestgen-runner/runner/install.sh'
 ```
 
-`install-tools.sh` (called by the runner install) installs Semgrep, gitleaks, osv-scanner, cargo-audit, Trivy, OWASP ZAP (with Java), nuclei and testssl.sh at pinned versions.
+The runner install generates a TLS certificate and a random token, then prints the two commands that connect the app to it (copy `cert.pem` to the app, then run `deploy/app/connect-runner.sh`).
+
+`install-tools.sh` (called by the runner install) installs Semgrep, gitleaks, osv-scanner, cargo-audit, Trivy, nuclei (plus its templates) and OWASP ZAP at pinned versions and checks each download's SHA-256. testssl.sh and Java (for ZAP) come from the distribution's packages.
+
+**Target allowlist:** both containers read `SCOPE_ALLOWLIST` from their env file (the install scripts ask for it), e.g. `SCOPE_ALLOWLIST=*.schwabejss.dk,10.0.20.0/24`. Keep the two lists identical; the runner refuses anything outside its own list even if the app asks. When networks are listed, every address a hostname resolves to must be inside one; without networks, loopback and link-local addresses are refused. To scan a site on the runner itself (e.g. a local test), list `127.0.0.1/32` explicitly.
+
+**Rate limits:** URL tests default to 10 requests per second (`DEFAULT_RATE_LIMIT_RPS`), adjustable per project in step 1 up to `MAX_RATE_LIMIT_RPS`. nuclei uses it directly (`-rl`) and the active ZAP scan as a delay between requests; ZAP's crawler uses two threads and testssl.sh makes a fixed, small number of TLS connections.
+
+Scans run as the runner's own unprivileged user with a timeout per tool and an empty environment (only `PATH`, `HOME` and cache paths), so the runner's token never reaches a tool. The systemd unit caps memory and process count for the runner and all scans together.
 
 **App settings** (`/etc/sectestgen/sectestgen.env`, permissions `600`):
 
@@ -450,6 +458,8 @@ DEFAULT_RATE_LIMIT_RPS=10
 
 **Local AI:** run Ollama in a third container or VM (roughly 8–16 GB RAM for a 7–14B model, or GPU passthrough) and set `LOCAL_BASE_URL`.
 
+**Database:** projects, runs, triage decisions and the audit log live in one SQLite file (`DATABASE_URL`), created on first start. Uploaded code stays on the runner and expires with its workspace (`WORKSPACE_RETENTION_DAYS`); re-running an old project after that asks you to upload it again.
+
 **Backups:** only the app container needs backing up (`/var/lib/sectestgen/` and the env file). The runner can be recreated from the install script.
 
 **Simpler alternative:** app and runner can run in the same container for a quick start, but you lose the isolation between your data and the untrusted uploads, so two containers are recommended.
@@ -458,10 +468,25 @@ DEFAULT_RATE_LIMIT_RPS=10
 
 ```bash
 cp .env.example .env
-cd frontend && npm install && npm run dev     # http://localhost:5173
-cargo run -p app                              # http://localhost:8080
-cargo run -p runner                           # needs tools: deploy/runner/install-tools.sh
+# Put a password hash in .env:
+echo "AUTH_PASSWORD_HASH='$(cargo run -q -p app -- hash-password 'my password')'" >> .env
+set -a && . ./.env && set +a && cargo run -p app   # API on http://localhost:8080
+cd frontend && npm install && npm run dev          # UI on http://localhost:5173 (proxies /api)
+cargo test                                         # rules, plan builder, login
 ```
+
+Or run the UI from the app itself: `cd frontend && npm run build`, then open http://localhost:8080.
+
+To run scans locally, start the runner too. It needs the tools on its `TOOLS_PATH`
+(`TOOLS_DIR=$PWD/.tools bash deploy/runner/install-tools.sh` installs them without root):
+
+```bash
+export RUNNER_TOKEN=$(openssl rand -hex 32)
+RUNNER_TOKEN=$RUNNER_TOKEN TOOLS_PATH=$PWD/.tools/bin:/usr/bin:/bin cargo run -p runner   # http://127.0.0.1:9090
+RUNNER_URL=http://127.0.0.1:9090 RUNNER_TOKEN=$RUNNER_TOKEN cargo run -p app             # in another shell, with the .env above
+```
+
+Without `TLS_CERT`/`TLS_KEY` the runner serves plain HTTP; that's for local development only.
 
 ---
 
@@ -480,20 +505,26 @@ cargo run -p runner                           # needs tools: deploy/runner/insta
 ## Roadmap
 
 **Phase 1 – Plan generator (MVP)**
-- [ ] Wizard UI, tags, description input, ~30 rules, Markdown export
-- [ ] Single-user login, LXC install for the app container
+- [x] Wizard UI, tags, description input, ~30 rules, Markdown export
+- [x] Single-user login, LXC install for the app container
 
 **Phase 2 – Code uploads**
-- [ ] Runner container with safe zip extraction and stack detection
-- [ ] Passive code actions: Semgrep, gitleaks, osv-scanner, cargo-audit, Trivy
-- [ ] Approve-and-run flow, live logs, findings view
+- [x] Runner container with safe zip extraction and stack detection
+- [x] Passive code actions: Semgrep, gitleaks, osv-scanner, cargo-audit, Trivy
+- [x] Approve-and-run flow, live logs, findings view
 
 **Phase 3 – URL targets**
-- [ ] Allowlist and scope enforcement in app and runner
-- [ ] Passive URL actions: fingerprinting, ZAP baseline, testssl.sh, nuclei (safe)
-- [ ] Active ZAP scan with confirmation and rate limits
+- [x] Allowlist and scope enforcement in app and runner
+- [x] Passive URL actions: fingerprinting, ZAP baseline, testssl.sh, nuclei (safe)
+- [x] Active ZAP scan with confirmation and rate limits
 
-**Phase 4 – AI and polish**
+**Phase 4 – History and polish**
+- [x] Saved projects and run history (SQLite), surviving restarts
+- [x] Run comparison: new, fixed and unchanged findings since the last run
+- [x] Mark findings as false positive or accepted risk, hidden in later runs
+- [x] SARIF export
+- [x] Mobile rules (MASVS) and Android/iOS project detection
+
+**Phase 5 – Later**
 - [ ] AI suggestions (Claude / OpenAI / local) with configurable data sharing
-- [ ] Run comparison, false-positive marking, SARIF export
-- [ ] Mobile rules (MASVS), authenticated scanning (login sessions for ZAP)
+- [ ] Authenticated scanning (login sessions for URL tests)

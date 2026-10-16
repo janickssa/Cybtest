@@ -1,0 +1,15 @@
+id: nuclei-safe
+title: Known misconfigurations and exposures
+tool: nuclei
+input: url
+mode: passive
+est_minutes: 5
+# HTTP templates only, without intrusive, DoS, fuzzing or brute-force ones.
+command: ["nuclei", "-u", "{{ url }}", "-t", "{{ tools_dir }}/nuclei-templates", "-pt", "http",
+          "-exclude-tags", "intrusive,dos,fuzz,fuzzing,bruteforce,brute-force,rce,sqli,xss",
+          "-rl", "{{ rps }}", "-c", "5", "-jsonl", "-o", "{{ out }}/nuclei.jsonl",
+          "-silent", "-nc", "-duc"]
+parser: nuclei-jsonl
+output: "{{ out }}/nuclei.jsonl"
+ok_exit_codes: [0]
+timeout_minutes: 30
